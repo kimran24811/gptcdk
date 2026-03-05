@@ -137,10 +137,43 @@ export async function registerRoutes(
         });
       }
 
-      // Strictly validate the JWT token — format + expiry
+      // Local JWT format + expiry check first (fast path for obviously bad tokens)
       const tokenCheck = validateAccessToken(accessToken);
       if (!tokenCheck.valid) {
         return res.json({ valid: false, message: tokenCheck.message });
+      }
+
+      // Actually verify the token is live by calling ChatGPT's API
+      let chatGptRes: Response;
+      try {
+        chatGptRes = await fetch("https://chatgpt.com/backend-api/me", {
+          method: "GET",
+          headers: {
+            "Authorization": `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          },
+        });
+      } catch {
+        // Network error reaching ChatGPT — can't verify, reject to be safe
+        return res.json({
+          valid: false,
+          message: "Could not reach ChatGPT to verify your session. Please check your connection and try again.",
+        });
+      }
+
+      if (chatGptRes.status === 401 || chatGptRes.status === 403) {
+        return res.json({
+          valid: false,
+          message: "Invalid token. Please get a new one — your session has expired or been revoked. Open the AuthSession page again to get a fresh token.",
+        });
+      }
+
+      if (!chatGptRes.ok) {
+        return res.json({
+          valid: false,
+          message: `Token verification failed (HTTP ${chatGptRes.status}). Please get a new session token.`,
+        });
       }
 
       return res.json({ valid: true, message: "Session data is valid." });
