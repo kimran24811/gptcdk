@@ -187,6 +187,13 @@ export default function RedeemPage() {
               >
                 Batch Check
               </a>
+              <a
+                href="/shop"
+                className="px-4 py-1.5 text-sm font-medium text-muted-foreground border-b-2 border-transparent"
+                data-testid="nav-shop"
+              >
+                Shop
+              </a>
             </nav>
             <a
               href="https://t.me/CDK_Keys?text=i%20want%20to%20purchase%20key"
