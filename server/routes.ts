@@ -1,13 +1,36 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
-import { storage } from "./storage";
 
 const CDK_API_KEY = process.env.CDK_API_KEY || "";
+const API_BASE = "https://keys.ovh/api/v1";
+
+async function apiCall(method: string, path: string, body?: object) {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method,
+    headers: {
+      "Authorization": `Bearer ${CDK_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  return res.json();
+}
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+
+  app.get("/api/products", async (_req, res) => {
+    try {
+      const data = await apiCall("GET", "/products");
+      return res.json(data);
+    } catch (err) {
+      console.error("Products fetch error:", err);
+      return res.status(500).json({ success: false, message: "Could not fetch products." });
+    }
+  });
+
   app.post("/api/validate-cdk", async (req, res) => {
     const { key } = req.body;
 
@@ -16,36 +39,34 @@ export async function registerRoutes(
     }
 
     try {
-      const trimmedKey = key.trim().toUpperCase();
+      const trimmedKey = key.trim();
+      const data = await apiCall("GET", `/key/${encodeURIComponent(trimmedKey)}/status`);
 
-      const isFormatValid =
-        trimmedKey.length >= 8 &&
-        /^[A-Z0-9\-]+$/.test(trimmedKey);
-
-      if (!isFormatValid) {
-        return res.json({
-          valid: false,
-          message: "Invalid CDK format. Please check your key and try again.",
-        });
+      if (!data.success) {
+        const msg =
+          data.error === "key_not_found"
+            ? "Key not found or not available."
+            : data.message || "Invalid key.";
+        return res.json({ valid: false, message: msg });
       }
 
-      const stored = await storage.validateCdk(trimmedKey, CDK_API_KEY);
-
-      if (stored) {
+      const keyData = data.data;
+      if (keyData.status === "available") {
         return res.json({
           valid: true,
-          type: stored.type,
-          message: "CDK is valid.",
+          type: `${keyData.product || "ChatGPT"} ${keyData.subscription || "Plus 1 Month"}`,
+          status: keyData.status,
         });
+      } else if (keyData.status === "used") {
+        return res.json({ valid: false, message: "This key has already been activated." });
+      } else if (keyData.status === "expired") {
+        return res.json({ valid: false, message: "This key has expired." });
+      } else {
+        return res.json({ valid: false, message: "Key is not available for activation." });
       }
-
-      return res.json({
-        valid: false,
-        message: "CDK not found or already used. Please check your key.",
-      });
     } catch (err) {
       console.error("CDK validation error:", err);
-      return res.status(500).json({ valid: false, message: "Validation service unavailable." });
+      return res.status(500).json({ valid: false, message: "Validation service unavailable. Please try again." });
     }
   });
 
@@ -63,17 +84,16 @@ export async function registerRoutes(
         return res.json({ valid: false, message: "Session data must be a JSON object." });
       }
 
-      const hasRequiredFields =
-        parsed.accessToken || parsed.user || parsed.expires || parsed.session;
+      const accessToken = parsed.accessToken || parsed.access_token || parsed.token;
 
-      if (!hasRequiredFields) {
+      if (!accessToken || typeof accessToken !== "string") {
         return res.json({
           valid: false,
-          message: "Session data appears incomplete. Make sure you copied the full JSON from the AuthSession page.",
+          message: "Could not find accessToken in session data. Make sure you copied the full JSON from the ChatGPT AuthSession page.",
         });
       }
 
-      return res.json({ valid: true, message: "Session data is valid." });
+      return res.json({ valid: true, message: "Session data is valid.", accessToken });
     } catch {
       return res.json({
         valid: false,
@@ -91,17 +111,60 @@ export async function registerRoutes(
 
     try {
       const parsed = JSON.parse(sessionData.trim());
+      const userToken = parsed.accessToken || parsed.access_token || parsed.token;
 
-      const result = await storage.activateCdk(cdkKey.trim().toUpperCase(), parsed, CDK_API_KEY);
-
-      if (result.success) {
-        return res.json({ success: true, message: "Subscription activated successfully." });
+      if (!userToken) {
+        return res.json({ success: false, message: "Could not extract user token from session data." });
       }
 
-      return res.json({ success: false, message: result.message || "Activation failed." });
+      const data = await apiCall("POST", "/activate", {
+        key: cdkKey.trim(),
+        user_token: userToken,
+      });
+
+      if (data.success) {
+        return res.json({
+          success: true,
+          email: data.data?.email,
+          product: data.data?.product,
+          subscription: data.data?.subscription,
+          activatedAt: data.data?.activated_at,
+        });
+      }
+
+      const errorMessages: Record<string, string> = {
+        key_not_found: "Key not found or not available.",
+        activation_failed: "Activation failed. Please check your session data and try again.",
+        rate_limit_exceeded: "Too many requests. Please wait and try again.",
+        token_inactive: "API token is inactive. Please contact support.",
+        token_expired: "API token has expired. Please contact support.",
+      };
+
+      const msg = errorMessages[data.error] || data.message || "Activation failed.";
+      return res.json({ success: false, message: msg });
     } catch (err) {
       console.error("Activation error:", err);
-      return res.status(500).json({ success: false, message: "Activation service unavailable." });
+      return res.status(500).json({ success: false, message: "Activation service unavailable. Please try again." });
+    }
+  });
+
+  app.post("/api/batch-status", async (req, res) => {
+    const { keys } = req.body;
+
+    if (!Array.isArray(keys) || keys.length === 0) {
+      return res.status(400).json({ success: false, message: "An array of keys is required." });
+    }
+
+    if (keys.length > 500) {
+      return res.status(400).json({ success: false, message: "Maximum 500 keys per request." });
+    }
+
+    try {
+      const data = await apiCall("POST", "/keys/batch-status", { keys });
+      return res.json(data);
+    } catch (err) {
+      console.error("Batch status error:", err);
+      return res.status(500).json({ success: false, message: "Service unavailable. Please try again." });
     }
   });
 

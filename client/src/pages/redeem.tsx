@@ -7,24 +7,23 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { CheckCircle, ExternalLink, Zap, AlertTriangle, Loader2, Check } from "lucide-react";
+import {
+  CheckCircle, ExternalLink, Zap, AlertTriangle,
+  Loader2, Check, User, Calendar, Package,
+} from "lucide-react";
 
 type Step = 1 | 2 | 3;
 
-interface CdkValidateResponse {
-  valid: boolean;
-  type?: string;
-  message?: string;
-}
-
-interface ActivateResponse {
-  success: boolean;
-  message?: string;
+interface ActivationResult {
+  email?: string;
+  product?: string;
+  subscription?: string;
+  activatedAt?: string;
 }
 
 function StepIndicator({ current }: { current: Step }) {
   return (
-    <div className="flex items-center gap-0 mb-8">
+    <div className="flex items-center mb-8">
       {[1, 2, 3].map((step, idx) => {
         const done = current > step;
         const active = current === step;
@@ -63,21 +62,17 @@ export default function RedeemPage() {
   const [cdkInfo, setCdkInfo] = useState<{ type: string } | null>(null);
   const [sessionData, setSessionData] = useState("");
   const [sessionValidated, setSessionValidated] = useState(false);
-  const [activated, setActivated] = useState(false);
+  const [activationResult, setActivationResult] = useState<ActivationResult | null>(null);
 
   const validateCdk = useMutation({
     mutationFn: async (key: string) => {
       const res = await apiRequest("POST", "/api/validate-cdk", { key });
-      return res.json() as Promise<CdkValidateResponse>;
+      return res.json();
     },
     onSuccess: (data) => {
       if (data.valid) {
-        setCdkInfo({ type: data.type || "CDK" });
+        setCdkInfo({ type: data.type });
         setStep(2);
-        toast({
-          title: "CDK validated",
-          description: `Your key is valid: ${data.type}`,
-        });
       } else {
         toast({
           title: "Invalid CDK",
@@ -89,7 +84,7 @@ export default function RedeemPage() {
     onError: () => {
       toast({
         title: "Validation failed",
-        description: "Could not validate your CDK. Please try again.",
+        description: "Could not reach the validation service. Please try again.",
         variant: "destructive",
       });
     },
@@ -98,14 +93,14 @@ export default function RedeemPage() {
   const validateSession = useMutation({
     mutationFn: async (data: string) => {
       const res = await apiRequest("POST", "/api/validate-session", { sessionData: data });
-      return res.json() as Promise<{ valid: boolean; message?: string }>;
+      return res.json();
     },
     onSuccess: (data) => {
       if (data.valid) {
         setSessionValidated(true);
         toast({
           title: "Session validated",
-          description: "Your session data looks good. Ready to activate.",
+          description: "Your session data is valid. You can now activate.",
         });
       } else {
         toast({
@@ -126,15 +121,17 @@ export default function RedeemPage() {
 
   const activate = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/activate", {
-        cdkKey,
-        sessionData,
-      });
-      return res.json() as Promise<ActivateResponse>;
+      const res = await apiRequest("POST", "/api/activate", { cdkKey, sessionData });
+      return res.json();
     },
     onSuccess: (data) => {
       if (data.success) {
-        setActivated(true);
+        setActivationResult({
+          email: data.email,
+          product: data.product,
+          subscription: data.subscription,
+          activatedAt: data.activatedAt,
+        });
         setStep(3);
       } else {
         toast({
@@ -147,11 +144,20 @@ export default function RedeemPage() {
     onError: () => {
       toast({
         title: "Activation error",
-        description: "Could not complete activation. Please try again.",
+        description: "Could not reach the activation service. Please try again.",
         variant: "destructive",
       });
     },
   });
+
+  const resetFlow = () => {
+    setStep(1);
+    setCdkKey("");
+    setCdkInfo(null);
+    setSessionData("");
+    setSessionValidated(false);
+    setActivationResult(null);
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -167,17 +173,18 @@ export default function RedeemPage() {
           </div>
           <nav className="flex items-center gap-1">
             <button
-              className="px-4 py-1.5 text-sm font-medium text-foreground border-b-2 border-primary transition-colors"
+              className="px-4 py-1.5 text-sm font-medium text-foreground border-b-2 border-primary"
               data-testid="nav-redeem"
             >
               Redeem
             </button>
-            <button
-              className="px-4 py-1.5 text-sm font-medium text-muted-foreground border-b-2 border-transparent transition-colors"
+            <a
+              href="/batch"
+              className="px-4 py-1.5 text-sm font-medium text-muted-foreground border-b-2 border-transparent"
               data-testid="nav-batch-check"
             >
               Batch Check
-            </button>
+            </a>
           </nav>
         </div>
       </header>
@@ -190,9 +197,9 @@ export default function RedeemPage() {
 
         <StepIndicator current={step} />
 
-        {step === 3 && activated ? (
+        {step === 3 && activationResult ? (
           <Card className="border border-card-border">
-            <CardContent className="py-16 flex flex-col items-center gap-4 text-center">
+            <CardContent className="py-12 flex flex-col items-center gap-6 text-center">
               <div className="w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center">
                 <CheckCircle className="w-10 h-10 text-primary" />
               </div>
@@ -202,7 +209,51 @@ export default function RedeemPage() {
                   Your subscription has been activated successfully.
                 </p>
               </div>
-              <div className="mt-2 p-4 rounded-md bg-accent/50 border border-accent-border text-accent-foreground text-sm max-w-sm">
+
+              {(activationResult.email || activationResult.product || activationResult.subscription) && (
+                <div className="w-full max-w-sm rounded-md border border-card-border bg-muted/40 divide-y divide-border text-sm text-left">
+                  {activationResult.email && (
+                    <div className="flex items-center gap-3 px-4 py-3">
+                      <User className="w-4 h-4 text-muted-foreground shrink-0" />
+                      <div>
+                        <div className="text-xs text-muted-foreground mb-0.5">Account</div>
+                        <div className="font-medium text-foreground" data-testid="text-activation-email">{activationResult.email}</div>
+                      </div>
+                    </div>
+                  )}
+                  {activationResult.product && (
+                    <div className="flex items-center gap-3 px-4 py-3">
+                      <Package className="w-4 h-4 text-muted-foreground shrink-0" />
+                      <div>
+                        <div className="text-xs text-muted-foreground mb-0.5">Product</div>
+                        <div className="font-medium text-foreground" data-testid="text-activation-product">{activationResult.product}</div>
+                      </div>
+                    </div>
+                  )}
+                  {activationResult.subscription && (
+                    <div className="flex items-center gap-3 px-4 py-3">
+                      <Zap className="w-4 h-4 text-muted-foreground shrink-0" />
+                      <div>
+                        <div className="text-xs text-muted-foreground mb-0.5">Subscription</div>
+                        <div className="font-medium text-foreground" data-testid="text-activation-subscription">{activationResult.subscription}</div>
+                      </div>
+                    </div>
+                  )}
+                  {activationResult.activatedAt && (
+                    <div className="flex items-center gap-3 px-4 py-3">
+                      <Calendar className="w-4 h-4 text-muted-foreground shrink-0" />
+                      <div>
+                        <div className="text-xs text-muted-foreground mb-0.5">Activated at</div>
+                        <div className="font-medium text-foreground" data-testid="text-activation-date">
+                          {new Date(activationResult.activatedAt).toLocaleString()}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="p-4 rounded-md bg-accent/50 border border-accent-border text-accent-foreground text-sm max-w-sm w-full">
                 <div className="flex items-start gap-2">
                   <AlertTriangle className="w-4 h-4 text-yellow-600 dark:text-yellow-400 mt-0.5 shrink-0" />
                   <span>
@@ -210,19 +261,8 @@ export default function RedeemPage() {
                   </span>
                 </div>
               </div>
-              <Button
-                variant="outline"
-                className="mt-2"
-                onClick={() => {
-                  setStep(1);
-                  setCdkKey("");
-                  setCdkInfo(null);
-                  setSessionData("");
-                  setSessionValidated(false);
-                  setActivated(false);
-                }}
-                data-testid="button-redeem-again"
-              >
+
+              <Button variant="outline" onClick={resetFlow} data-testid="button-redeem-again">
                 Redeem Another
               </Button>
             </CardContent>
@@ -279,7 +319,7 @@ export default function RedeemPage() {
                     Get AuthSession data
                   </h2>
                   {step >= 2 && (
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 flex-wrap">
                       <a
                         href="https://chat.openai.com"
                         target="_blank"
@@ -304,10 +344,10 @@ export default function RedeemPage() {
                   )}
                 </div>
                 <p className="text-sm text-muted-foreground mb-3">
-                  Open the page below, copy the full JSON content, then paste it and click validate.
+                  Open the AuthSession page, copy the full JSON content, then paste it here and click validate.
                 </p>
                 <Textarea
-                  placeholder="Paste the full JSON from AuthSession page"
+                  placeholder='Paste the full JSON from AuthSession page (e.g. {"accessToken":"...","user":{...}})'
                   value={sessionData}
                   onChange={(e) => {
                     setSessionData(e.target.value);
@@ -317,19 +357,27 @@ export default function RedeemPage() {
                   className={`min-h-[110px] font-mono text-xs resize-none ${sessionValidated ? "border-primary" : ""}`}
                   data-testid="textarea-session-data"
                 />
-                <div className="flex justify-end mt-2">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => validateSession.mutate(sessionData.trim())}
-                    disabled={!sessionData.trim() || step < 2 || sessionValidated || validateSession.isPending}
-                    data-testid="button-validate-session"
-                  >
-                    {validateSession.isPending ? (
-                      <Loader2 className="w-3 h-3 animate-spin mr-1" />
-                    ) : null}
-                    Validate
-                  </Button>
+                <div className="flex items-center justify-between mt-2">
+                  {sessionValidated && (
+                    <div className="flex items-center gap-1.5 text-xs text-primary font-medium" data-testid="session-valid-indicator">
+                      <Check className="w-3.5 h-3.5" />
+                      Session validated
+                    </div>
+                  )}
+                  <div className="ml-auto">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => validateSession.mutate(sessionData.trim())}
+                      disabled={!sessionData.trim() || step < 2 || sessionValidated || validateSession.isPending}
+                      data-testid="button-validate-session"
+                    >
+                      {validateSession.isPending ? (
+                        <Loader2 className="w-3 h-3 animate-spin mr-1" />
+                      ) : null}
+                      Validate
+                    </Button>
+                  </div>
                 </div>
               </div>
 
@@ -345,10 +393,10 @@ export default function RedeemPage() {
                 ) : (
                   <Zap className="w-4 h-4" />
                 )}
-                Activate
+                {activate.isPending ? "Activating..." : "Activate"}
               </Button>
 
-              <div className="flex items-start gap-2 text-xs text-muted-foreground pt-0">
+              <div className="flex items-start gap-2 text-xs text-muted-foreground">
                 <AlertTriangle className="w-4 h-4 text-yellow-600 dark:text-yellow-400 shrink-0 mt-0.5" />
                 <span>
                   After activation, try refreshing the ChatGPT page multiple times. The page will refresh itself to update the subscription status.
