@@ -66,7 +66,7 @@ const VOLUME_DISCOUNTS = [
 // ─────────────────────────────────────────────
 const BINANCE_PAY_ID = "552780449";
 const BINANCE_USERNAME = "User-1d9f7";
-const TELEGRAM_USERNAME = "CDKAuthKeys"; // opens t.me/CDKAuthKeys
+const TELEGRAM_USERNAME = "CDK_Keys"; // opens t.me/CDK_Keys
 
 function useCopied(ms = 2000) {
   const [copied, setCopied] = useState(false);
