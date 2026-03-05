@@ -16,6 +16,48 @@ async function apiCall(method: string, path: string, body?: object) {
   return res.json();
 }
 
+function validateAccessToken(token: string): { valid: boolean; message?: string } {
+  // Must be a non-empty string
+  if (!token || typeof token !== "string" || token.trim().length === 0) {
+    return { valid: false, message: "No access token found in session data." };
+  }
+
+  const parts = token.split(".");
+
+  // A JWT must have exactly 3 parts
+  if (parts.length !== 3) {
+    return {
+      valid: false,
+      message: "Invalid token format. Please copy the full JSON from the AuthSession page.",
+    };
+  }
+
+  // Decode the payload (second part) — base64url encoded
+  try {
+    const payloadBase64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = payloadBase64 + "=".repeat((4 - (payloadBase64.length % 4)) % 4);
+    const payload = JSON.parse(Buffer.from(padded, "base64").toString("utf8"));
+
+    // Check expiry
+    if (payload.exp) {
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      if (payload.exp < nowSeconds) {
+        return {
+          valid: false,
+          message: "Invalid token. Please get a new one — your session has expired. Open the AuthSession page again to get a fresh token.",
+        };
+      }
+    }
+
+    return { valid: true };
+  } catch {
+    return {
+      valid: false,
+      message: "Could not read token data. Make sure you copied the full JSON from the AuthSession page.",
+    };
+  }
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -52,9 +94,11 @@ export async function registerRoutes(
 
       const keyData = data.data;
       if (keyData.status === "available") {
+        // Only show subscription name, not "ChatGPT ChatGPT Plus CDK"
+        const type = keyData.subscription || "Plus CDK";
         return res.json({
           valid: true,
-          type: `${keyData.product || "ChatGPT"} ${keyData.subscription || "Plus 1 Month"}`,
+          type,
           status: keyData.status,
         });
       } else if (keyData.status === "used") {
@@ -89,11 +133,17 @@ export async function registerRoutes(
       if (!accessToken || typeof accessToken !== "string") {
         return res.json({
           valid: false,
-          message: "Could not find accessToken in session data. Make sure you copied the full JSON from the ChatGPT AuthSession page.",
+          message: "No accessToken found in session data. Make sure you copied the full JSON from the ChatGPT AuthSession page (chat.openai.com/api/auth/session).",
         });
       }
 
-      return res.json({ valid: true, message: "Session data is valid.", accessToken });
+      // Strictly validate the JWT token — format + expiry
+      const tokenCheck = validateAccessToken(accessToken);
+      if (!tokenCheck.valid) {
+        return res.json({ valid: false, message: tokenCheck.message });
+      }
+
+      return res.json({ valid: true, message: "Session data is valid." });
     } catch {
       return res.json({
         valid: false,
@@ -115,6 +165,12 @@ export async function registerRoutes(
 
       if (!userToken) {
         return res.json({ success: false, message: "Could not extract user token from session data." });
+      }
+
+      // Final token check before hitting the API
+      const tokenCheck = validateAccessToken(userToken);
+      if (!tokenCheck.valid) {
+        return res.json({ success: false, message: tokenCheck.message });
       }
 
       const data = await apiCall("POST", "/activate", {

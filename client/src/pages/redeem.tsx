@@ -63,6 +63,7 @@ export default function RedeemPage() {
   const [cdkInfo, setCdkInfo] = useState<{ type: string } | null>(null);
   const [sessionData, setSessionData] = useState("");
   const [sessionValidated, setSessionValidated] = useState(false);
+  const [sessionError, setSessionError] = useState<string | null>(null);
   const [activationResult, setActivationResult] = useState<ActivationResult | null>(null);
 
   const validateCdk = useMutation({
@@ -99,24 +100,13 @@ export default function RedeemPage() {
     onSuccess: (data) => {
       if (data.valid) {
         setSessionValidated(true);
-        toast({
-          title: "Session validated",
-          description: "Your session data is valid. You can now activate.",
-        });
+        setSessionError(null);
       } else {
-        toast({
-          title: "Invalid session data",
-          description: data.message || "Please paste valid JSON from the AuthSession page.",
-          variant: "destructive",
-        });
+        setSessionError(data.message || "Please paste valid JSON from the AuthSession page.");
       }
     },
     onError: () => {
-      toast({
-        title: "Validation failed",
-        description: "Could not validate session data. Please try again.",
-        variant: "destructive",
-      });
+      setSessionError("Could not validate session data. Please try again.");
     },
   });
 
@@ -157,6 +147,7 @@ export default function RedeemPage() {
     setCdkInfo(null);
     setSessionData("");
     setSessionValidated(false);
+    setSessionError(null);
     setActivationResult(null);
   };
 
@@ -373,11 +364,20 @@ export default function RedeemPage() {
                   onChange={(e) => {
                     setSessionData(e.target.value);
                     setSessionValidated(false);
+                    setSessionError(null);
                   }}
                   disabled={step < 2 || validateSession.isPending || activate.isPending}
-                  className={`min-h-[110px] font-mono text-xs resize-none ${sessionValidated ? "border-primary" : ""}`}
+                  className={`min-h-[110px] font-mono text-xs resize-none ${
+                    sessionValidated ? "border-primary" : sessionError ? "border-destructive" : ""
+                  }`}
                   data-testid="textarea-session-data"
                 />
+                {sessionError && (
+                  <div className="flex items-start gap-2 mt-2 text-xs text-destructive" data-testid="session-error-message">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    <span>{sessionError}</span>
+                  </div>
+                )}
                 <div className="flex items-center justify-between mt-2">
                   {sessionValidated && (
                     <div className="flex items-center gap-1.5 text-xs text-primary font-medium" data-testid="session-valid-indicator">
