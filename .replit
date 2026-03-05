@@ -37,3 +37,8 @@ author = "agent"
 task = "shell.exec"
 args = "npm run dev"
 waitForPort = 5000
+
+[userenv]
+
+[userenv.shared]
+CDK_API_KEY = "sk_live_f6b4bff46ad9362491cb00c35cfa2f82ae7f6e013230f27b"
