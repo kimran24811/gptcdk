@@ -196,23 +196,62 @@ export default function ShopPage() {
             {selectedPlan.id === "plus-1m" && (
               <Card className="border border-card-border">
                 <CardContent className="p-5">
-                  <div className="flex items-center gap-2 mb-4">
+                  <div className="flex items-center gap-2 mb-1">
                     <Zap className="w-4 h-4 text-primary" />
                     <h3 className="text-sm font-semibold text-foreground">Volume Discounts</h3>
                   </div>
-                  <div className="space-y-3">
-                    {VOLUME_DISCOUNTS.map((tier) => (
-                      <div key={tier.qty} className="flex items-center justify-between" data-testid={`volume-tier-${tier.qty}`}>
-                        <div className="flex items-center gap-3">
-                          <span className="text-sm text-muted-foreground w-12">≥{tier.qty}</span>
-                          <span className="text-base font-bold text-foreground">${tier.price.toFixed(2)}</span>
-                          <span className="text-xs text-muted-foreground">/ unit</span>
-                        </div>
-                        <span className="text-xs font-semibold text-red-500 bg-red-50 dark:bg-red-950/30 px-2 py-0.5 rounded">
-                          {tier.pct}%
-                        </span>
-                      </div>
-                    ))}
+                  <p className="text-xs text-muted-foreground mb-4">Click a row to apply it instantly</p>
+                  <div className="space-y-2">
+                    {VOLUME_DISCOUNTS.map((tier) => {
+                      const BASE_PRICE = 2.45;
+                      const tierTotal = (tier.price * tier.qty).toFixed(2);
+                      const savedTotal = ((BASE_PRICE - tier.price) * tier.qty).toFixed(2);
+                      const isActive = quantity === tier.qty;
+                      return (
+                        <button
+                          key={tier.qty}
+                          onClick={() => setQuantity(tier.qty)}
+                          className={`w-full text-left px-4 py-3 rounded-lg border-2 transition-all duration-150 hover-elevate ${
+                            isActive
+                              ? "border-primary bg-primary/5"
+                              : "border-border bg-background"
+                          }`}
+                          data-testid={`volume-tier-${tier.qty}`}
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-3 flex-wrap">
+                              <span className={`text-sm font-medium w-10 shrink-0 ${isActive ? "text-primary" : "text-muted-foreground"}`}>
+                                ≥{tier.qty}
+                              </span>
+                              <div>
+                                <div className="flex items-baseline gap-1.5">
+                                  <span className="text-base font-bold text-foreground">${tier.price.toFixed(2)}</span>
+                                  <span className="text-xs text-muted-foreground">/ unit</span>
+                                </div>
+                                {isActive && (
+                                  <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                                    <span className="text-xs text-muted-foreground">
+                                      {tier.qty} keys × ${tier.price.toFixed(2)} = <span className="font-semibold text-foreground">${tierTotal}</span>
+                                    </span>
+                                    <span className="text-xs font-semibold text-primary">
+                                      Save ${savedTotal}
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              {isActive && (
+                                <CheckCircle className="w-4 h-4 text-primary" />
+                              )}
+                              <span className="text-xs font-semibold text-red-500 bg-red-50 dark:bg-red-950/30 px-2 py-0.5 rounded">
+                                {tier.pct}%
+                              </span>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
                 </CardContent>
               </Card>
