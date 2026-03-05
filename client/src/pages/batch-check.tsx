@@ -7,7 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, CheckCircle, XCircle, Clock, AlertTriangle, Copy, Check } from "lucide-react";
-import { SiTelegram } from "react-icons/si";
+import { PageLayout } from "@/components/page-layout";
 
 interface KeyStatus {
   key: string;
@@ -130,161 +130,143 @@ export default function BatchCheckPage() {
       }
     : null;
 
+  const keyCount = keysInput.split(/[\n,]+/).filter((k) => k.trim().length > 0).length;
+
   return (
-    <div className="min-h-screen bg-background">
-      <header className="border-b border-border bg-background sticky top-0 z-50">
-        <div className="max-w-3xl mx-auto px-4 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span className="font-bold text-foreground text-lg tracking-tight">ChatGPT Recharge</span>
-            <Badge variant="default" className="text-xs" data-testid="badge-plus">Plus</Badge>
-          </div>
-          <div className="flex items-center gap-3">
-            <nav className="flex items-center gap-1">
-              <a href="/" className="px-4 py-1.5 text-sm font-medium text-muted-foreground border-b-2 border-transparent" data-testid="nav-redeem">Redeem</a>
-              <button className="px-4 py-1.5 text-sm font-medium text-foreground border-b-2 border-primary" data-testid="nav-batch-check">Batch Check</button>
-              <a href="/shop" className="px-4 py-1.5 text-sm font-medium text-muted-foreground border-b-2 border-transparent" data-testid="nav-shop">Shop</a>
-            </nav>
-            <a href="https://t.me/CDK_Keys?text=i%20want%20to%20purchase%20key" target="_blank" rel="noopener noreferrer" data-testid="button-telegram">
-              <Button size="sm" className="gap-1.5 bg-[#229ED9] text-white border-[#1a8bbf]">
-                <SiTelegram className="w-3.5 h-3.5" />
-                Buy Key
+    <PageLayout>
+      <div className="mb-6 sm:mb-8">
+        <h1 className="text-2xl sm:text-3xl font-bold text-foreground mb-1">Batch Check</h1>
+        <p className="text-muted-foreground text-sm">Check the status of multiple CDK keys at once</p>
+      </div>
+
+      <Card className="border border-card-border mb-5">
+        <CardContent className="p-4 sm:p-6 space-y-4">
+          <div>
+            <label className="text-sm font-medium text-foreground block mb-1.5">Enter CDK keys</label>
+            <p className="text-xs text-muted-foreground mb-3">
+              Paste one key per line, or separate with commas. Maximum 500 keys.
+            </p>
+            <Textarea
+              placeholder={"XXXXX-XXXXX-XXX\nYYYYY-YYYYY-YYY\nZZZZZ-ZZZZZ-ZZZ"}
+              value={keysInput}
+              onChange={(e) => { setKeysInput(e.target.value); setResults(null); }}
+              className="min-h-[140px] sm:min-h-[160px] font-mono text-xs resize-none"
+              data-testid="textarea-batch-keys"
+            />
+            <div className="flex items-center justify-between mt-3 gap-3">
+              <span className="text-xs text-muted-foreground shrink-0">
+                {keyCount} {keyCount === 1 ? "key" : "keys"} entered
+              </span>
+              <Button
+                onClick={handleCheck}
+                disabled={!keysInput.trim() || batchCheck.isPending}
+                data-testid="button-batch-check"
+                className="shrink-0"
+              >
+                {batchCheck.isPending ? (
+                  <><Loader2 className="w-4 h-4 animate-spin mr-2" />Checking...</>
+                ) : "Check Status"}
               </Button>
-            </a>
+            </div>
           </div>
-        </div>
-      </header>
+        </CardContent>
+      </Card>
 
-      <main className="max-w-3xl mx-auto px-4 py-10">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-foreground mb-1">Batch Check</h1>
-          <p className="text-muted-foreground text-sm">Check the status of multiple CDK keys at once</p>
-        </div>
+      {results && (
+        <>
+          {/* Summary counts — 2 cols on mobile, 4 on sm+ */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 mb-4">
+            {[
+              { label: "Available", count: counts!.available, variant: "default" as const },
+              { label: "Used", count: counts!.used, variant: "secondary" as const },
+              { label: "Expired", count: counts!.expired, variant: "secondary" as const },
+              { label: "Invalid", count: counts!.invalid, variant: "destructive" as const },
+            ].map(({ label, count, variant }) => (
+              <Card key={label} className="border border-card-border">
+                <CardContent className="p-3 sm:p-4 text-center">
+                  <div className="text-xl sm:text-2xl font-bold text-foreground">{count}</div>
+                  <Badge variant={variant} className="text-xs mt-1">{label}</Badge>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
 
-        <Card className="border border-card-border mb-6">
-          <CardContent className="p-6 space-y-4">
-            <div>
-              <label className="text-sm font-medium text-foreground block mb-2">Enter CDK keys</label>
-              <p className="text-xs text-muted-foreground mb-3">
-                Paste one key per line, or separate them with commas. Maximum 500 keys per request.
-              </p>
-              <Textarea
-                placeholder={"XXXXX-XXXXX-XXX\nYYYYY-YYYYY-YYY\nZZZZZ-ZZZZZ-ZZZ"}
-                value={keysInput}
-                onChange={(e) => { setKeysInput(e.target.value); setResults(null); }}
-                className="min-h-[160px] font-mono text-xs resize-none"
-                data-testid="textarea-batch-keys"
-              />
-              <div className="flex items-center justify-between mt-3">
-                <span className="text-xs text-muted-foreground">
-                  {keysInput.split(/[\n,]+/).filter((k) => k.trim().length > 0).length} keys entered
-                </span>
-                <Button onClick={handleCheck} disabled={!keysInput.trim() || batchCheck.isPending} data-testid="button-batch-check">
-                  {batchCheck.isPending ? (
-                    <><Loader2 className="w-4 h-4 animate-spin mr-2" />Checking...</>
-                  ) : "Check Status"}
+          {/* Results card */}
+          <Card className="border border-card-border">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-3 border-b border-border gap-3">
+              <span className="text-sm font-medium text-foreground shrink-0">
+                {results.length} keys checked
+              </span>
+              {counts!.available > 0 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5 text-xs shrink-0"
+                  onClick={copyAllAvailable}
+                  data-testid="button-copy-all-available"
+                >
+                  {copiedAll ? (
+                    <><Check className="w-3.5 h-3.5 text-primary" />Copied {counts!.available}</>
+                  ) : (
+                    <><Copy className="w-3.5 h-3.5" /><span className="hidden xs:inline">Copy All Available ({counts!.available})</span><span className="xs:hidden">Copy All ({counts!.available})</span></>
+                  )}
                 </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {results && (
-          <>
-            {/* Summary counts */}
-            <div className="grid grid-cols-4 gap-3 mb-4">
-              {[
-                { label: "Available", count: counts!.available, variant: "default" as const },
-                { label: "Used", count: counts!.used, variant: "secondary" as const },
-                { label: "Expired", count: counts!.expired, variant: "secondary" as const },
-                { label: "Invalid", count: counts!.invalid, variant: "destructive" as const },
-              ].map(({ label, count, variant }) => (
-                <Card key={label} className="border border-card-border">
-                  <CardContent className="p-4 text-center">
-                    <div className="text-2xl font-bold text-foreground">{count}</div>
-                    <Badge variant={variant} className="text-xs mt-1">{label}</Badge>
-                  </CardContent>
-                </Card>
-              ))}
+              )}
             </div>
 
-            {/* Results card */}
-            <Card className="border border-card-border">
-              {/* Card header with "Copy All Available" */}
-              <div className="flex items-center justify-between px-5 py-3 border-b border-border">
-                <span className="text-sm font-medium text-foreground">
-                  {results.length} keys checked
-                </span>
-                {counts!.available > 0 && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="gap-1.5"
-                    onClick={copyAllAvailable}
-                    data-testid="button-copy-all-available"
-                  >
-                    {copiedAll ? (
-                      <><Check className="w-3.5 h-3.5 text-primary" />Copied {counts!.available} keys</>
-                    ) : (
-                      <><Copy className="w-3.5 h-3.5" />Copy All Available ({counts!.available})</>
-                    )}
-                  </Button>
-                )}
-              </div>
+            <CardContent className="p-0">
+              <div className="divide-y divide-border">
+                {results.map((item, idx) => {
+                  const config = STATUS_CONFIG[item.status] || STATUS_CONFIG.invalid;
+                  const Icon = config.icon;
+                  const isCopied = copiedKeys.has(item.key);
+                  const isAvailable = item.status === "available";
 
-              <CardContent className="p-0">
-                <div className="divide-y divide-border">
-                  {results.map((item, idx) => {
-                    const config = STATUS_CONFIG[item.status] || STATUS_CONFIG.invalid;
-                    const Icon = config.icon;
-                    const isCopied = copiedKeys.has(item.key);
-                    const isAvailable = item.status === "available";
-
-                    return (
-                      <div
-                        key={idx}
-                        className="flex items-center justify-between px-5 py-3 gap-3"
-                        data-testid={`row-key-${idx}`}
-                      >
-                        <code className="text-sm font-mono text-foreground truncate flex-1">
-                          {item.key}
-                        </code>
-                        <div className="flex items-center gap-2 shrink-0">
-                          {item.activated_at && (
-                            <span className="text-xs text-muted-foreground hidden sm:block">
-                              {new Date(item.activated_at).toLocaleDateString()}
-                            </span>
-                          )}
-                          <Badge variant={config.badge} className="gap-1">
-                            <Icon className="w-3 h-3" />
-                            {config.label}
-                          </Badge>
-                          {isAvailable && (
-                            <button
-                              onClick={() => copyKey(item.key)}
-                              className={`flex items-center justify-center w-7 h-7 rounded-md border transition-all duration-150 shrink-0 ${
-                                isCopied
-                                  ? "border-primary bg-primary/10 text-primary"
-                                  : "border-border bg-background text-muted-foreground hover-elevate"
-                              }`}
-                              title="Copy key"
-                              data-testid={`button-copy-key-${idx}`}
-                            >
-                              {isCopied
-                                ? <Check className="w-3.5 h-3.5" />
-                                : <Copy className="w-3.5 h-3.5" />
-                              }
-                            </button>
-                          )}
-                        </div>
+                  return (
+                    <div
+                      key={idx}
+                      className="flex items-center justify-between px-4 sm:px-5 py-3 gap-2 sm:gap-3"
+                      data-testid={`row-key-${idx}`}
+                    >
+                      <code className="text-xs sm:text-sm font-mono text-foreground truncate flex-1 min-w-0">
+                        {item.key}
+                      </code>
+                      <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                        {item.activated_at && (
+                          <span className="text-xs text-muted-foreground hidden md:block">
+                            {new Date(item.activated_at).toLocaleDateString()}
+                          </span>
+                        )}
+                        <Badge variant={config.badge} className="gap-1 text-xs shrink-0">
+                          <Icon className="w-3 h-3" />
+                          <span className="hidden xs:inline">{config.label}</span>
+                        </Badge>
+                        {isAvailable && (
+                          <button
+                            onClick={() => copyKey(item.key)}
+                            className={`flex items-center justify-center w-7 h-7 rounded-md border transition-all duration-150 shrink-0 ${
+                              isCopied
+                                ? "border-primary bg-primary/10 text-primary"
+                                : "border-border bg-background text-muted-foreground hover-elevate"
+                            }`}
+                            title="Copy key"
+                            data-testid={`button-copy-key-${idx}`}
+                          >
+                            {isCopied
+                              ? <Check className="w-3.5 h-3.5" />
+                              : <Copy className="w-3.5 h-3.5" />
+                            }
+                          </button>
+                        )}
                       </div>
-                    );
-                  })}
-                </div>
-              </CardContent>
-            </Card>
-          </>
-        )}
-      </main>
-    </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      )}
+    </PageLayout>
   );
 }
