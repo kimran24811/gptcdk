@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -6,7 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, CheckCircle, XCircle, Clock, AlertTriangle } from "lucide-react";
+import { Loader2, CheckCircle, XCircle, Clock, AlertTriangle, Copy, Check } from "lucide-react";
 import { SiTelegram } from "react-icons/si";
 
 interface KeyStatus {
@@ -20,25 +20,21 @@ const STATUS_CONFIG = {
     label: "Available",
     icon: CheckCircle,
     badge: "default" as const,
-    color: "text-primary",
   },
   used: {
     label: "Used",
     icon: XCircle,
     badge: "secondary" as const,
-    color: "text-muted-foreground",
   },
   expired: {
     label: "Expired",
     icon: Clock,
     badge: "secondary" as const,
-    color: "text-muted-foreground",
   },
   invalid: {
     label: "Invalid",
     icon: AlertTriangle,
     badge: "destructive" as const,
-    color: "text-destructive",
   },
 };
 
@@ -46,6 +42,8 @@ export default function BatchCheckPage() {
   const { toast } = useToast();
   const [keysInput, setKeysInput] = useState("");
   const [results, setResults] = useState<KeyStatus[] | null>(null);
+  const [copiedKeys, setCopiedKeys] = useState<Set<string>>(new Set());
+  const [copiedAll, setCopiedAll] = useState(false);
 
   const batchCheck = useMutation({
     mutationFn: async (keys: string[]) => {
@@ -55,6 +53,8 @@ export default function BatchCheckPage() {
     onSuccess: (data) => {
       if (data.success) {
         setResults(data.data);
+        setCopiedKeys(new Set());
+        setCopiedAll(false);
       } else {
         toast({
           title: "Check failed",
@@ -90,6 +90,37 @@ export default function BatchCheckPage() {
     batchCheck.mutate(keys);
   };
 
+  const copyKey = useCallback((key: string) => {
+    navigator.clipboard.writeText(key).then(() => {
+      setCopiedKeys((prev) => new Set(prev).add(key));
+      setTimeout(() => {
+        setCopiedKeys((prev) => {
+          const next = new Set(prev);
+          next.delete(key);
+          return next;
+        });
+      }, 2000);
+    });
+  }, []);
+
+  const copyAllAvailable = useCallback(() => {
+    if (!results) return;
+    const availableKeys = results
+      .filter((r) => r.status === "available")
+      .map((r) => r.key)
+      .join("\n");
+    if (!availableKeys) {
+      toast({ title: "No available keys", description: "There are no available keys to copy.", variant: "destructive" });
+      return;
+    }
+    navigator.clipboard.writeText(availableKeys).then(() => {
+      setCopiedAll(true);
+      setTimeout(() => setCopiedAll(false), 2500);
+      const count = results.filter((r) => r.status === "available").length;
+      toast({ title: `Copied ${count} available keys`, description: "Keys copied to clipboard." });
+    });
+  }, [results, toast]);
+
   const counts = results
     ? {
         available: results.filter((r) => r.status === "available").length,
@@ -104,42 +135,16 @@ export default function BatchCheckPage() {
       <header className="border-b border-border bg-background sticky top-0 z-50">
         <div className="max-w-3xl mx-auto px-4 h-14 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <span className="font-bold text-foreground text-lg tracking-tight">
-              ChatGPT Recharge
-            </span>
-            <Badge variant="default" className="text-xs" data-testid="badge-plus">
-              Plus
-            </Badge>
+            <span className="font-bold text-foreground text-lg tracking-tight">ChatGPT Recharge</span>
+            <Badge variant="default" className="text-xs" data-testid="badge-plus">Plus</Badge>
           </div>
           <div className="flex items-center gap-3">
             <nav className="flex items-center gap-1">
-              <a
-                href="/"
-                className="px-4 py-1.5 text-sm font-medium text-muted-foreground border-b-2 border-transparent"
-                data-testid="nav-redeem"
-              >
-                Redeem
-              </a>
-              <button
-                className="px-4 py-1.5 text-sm font-medium text-foreground border-b-2 border-primary"
-                data-testid="nav-batch-check"
-              >
-                Batch Check
-              </button>
-              <a
-                href="/shop"
-                className="px-4 py-1.5 text-sm font-medium text-muted-foreground border-b-2 border-transparent"
-                data-testid="nav-shop"
-              >
-                Shop
-              </a>
+              <a href="/" className="px-4 py-1.5 text-sm font-medium text-muted-foreground border-b-2 border-transparent" data-testid="nav-redeem">Redeem</a>
+              <button className="px-4 py-1.5 text-sm font-medium text-foreground border-b-2 border-primary" data-testid="nav-batch-check">Batch Check</button>
+              <a href="/shop" className="px-4 py-1.5 text-sm font-medium text-muted-foreground border-b-2 border-transparent" data-testid="nav-shop">Shop</a>
             </nav>
-            <a
-              href="https://t.me/CDK_Keys?text=i%20want%20to%20purchase%20key"
-              target="_blank"
-              rel="noopener noreferrer"
-              data-testid="button-telegram"
-            >
+            <a href="https://t.me/CDK_Keys?text=i%20want%20to%20purchase%20key" target="_blank" rel="noopener noreferrer" data-testid="button-telegram">
               <Button size="sm" className="gap-1.5 bg-[#229ED9] text-white border-[#1a8bbf]">
                 <SiTelegram className="w-3.5 h-3.5" />
                 Buy Key
@@ -158,19 +163,14 @@ export default function BatchCheckPage() {
         <Card className="border border-card-border mb-6">
           <CardContent className="p-6 space-y-4">
             <div>
-              <label className="text-sm font-medium text-foreground block mb-2">
-                Enter CDK keys
-              </label>
+              <label className="text-sm font-medium text-foreground block mb-2">Enter CDK keys</label>
               <p className="text-xs text-muted-foreground mb-3">
                 Paste one key per line, or separate them with commas. Maximum 500 keys per request.
               </p>
               <Textarea
                 placeholder={"XXXXX-XXXXX-XXX\nYYYYY-YYYYY-YYY\nZZZZZ-ZZZZZ-ZZZ"}
                 value={keysInput}
-                onChange={(e) => {
-                  setKeysInput(e.target.value);
-                  setResults(null);
-                }}
+                onChange={(e) => { setKeysInput(e.target.value); setResults(null); }}
                 className="min-h-[160px] font-mono text-xs resize-none"
                 data-testid="textarea-batch-keys"
               />
@@ -178,16 +178,10 @@ export default function BatchCheckPage() {
                 <span className="text-xs text-muted-foreground">
                   {keysInput.split(/[\n,]+/).filter((k) => k.trim().length > 0).length} keys entered
                 </span>
-                <Button
-                  onClick={handleCheck}
-                  disabled={!keysInput.trim() || batchCheck.isPending}
-                  data-testid="button-batch-check"
-                >
+                <Button onClick={handleCheck} disabled={!keysInput.trim() || batchCheck.isPending} data-testid="button-batch-check">
                   {batchCheck.isPending ? (
                     <><Loader2 className="w-4 h-4 animate-spin mr-2" />Checking...</>
-                  ) : (
-                    "Check Status"
-                  )}
+                  ) : "Check Status"}
                 </Button>
               </div>
             </div>
@@ -196,34 +190,59 @@ export default function BatchCheckPage() {
 
         {results && (
           <>
-            {counts && (
-              <div className="grid grid-cols-4 gap-3 mb-4">
-                {[
-                  { label: "Available", count: counts.available, variant: "default" as const },
-                  { label: "Used", count: counts.used, variant: "secondary" as const },
-                  { label: "Expired", count: counts.expired, variant: "secondary" as const },
-                  { label: "Invalid", count: counts.invalid, variant: "destructive" as const },
-                ].map(({ label, count, variant }) => (
-                  <Card key={label} className="border border-card-border">
-                    <CardContent className="p-4 text-center">
-                      <div className="text-2xl font-bold text-foreground">{count}</div>
-                      <Badge variant={variant} className="text-xs mt-1">{label}</Badge>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            )}
+            {/* Summary counts */}
+            <div className="grid grid-cols-4 gap-3 mb-4">
+              {[
+                { label: "Available", count: counts!.available, variant: "default" as const },
+                { label: "Used", count: counts!.used, variant: "secondary" as const },
+                { label: "Expired", count: counts!.expired, variant: "secondary" as const },
+                { label: "Invalid", count: counts!.invalid, variant: "destructive" as const },
+              ].map(({ label, count, variant }) => (
+                <Card key={label} className="border border-card-border">
+                  <CardContent className="p-4 text-center">
+                    <div className="text-2xl font-bold text-foreground">{count}</div>
+                    <Badge variant={variant} className="text-xs mt-1">{label}</Badge>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
 
+            {/* Results card */}
             <Card className="border border-card-border">
+              {/* Card header with "Copy All Available" */}
+              <div className="flex items-center justify-between px-5 py-3 border-b border-border">
+                <span className="text-sm font-medium text-foreground">
+                  {results.length} keys checked
+                </span>
+                {counts!.available > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5"
+                    onClick={copyAllAvailable}
+                    data-testid="button-copy-all-available"
+                  >
+                    {copiedAll ? (
+                      <><Check className="w-3.5 h-3.5 text-primary" />Copied {counts!.available} keys</>
+                    ) : (
+                      <><Copy className="w-3.5 h-3.5" />Copy All Available ({counts!.available})</>
+                    )}
+                  </Button>
+                )}
+              </div>
+
               <CardContent className="p-0">
                 <div className="divide-y divide-border">
                   {results.map((item, idx) => {
                     const config = STATUS_CONFIG[item.status] || STATUS_CONFIG.invalid;
                     const Icon = config.icon;
+                    const isCopied = copiedKeys.has(item.key);
+                    const isAvailable = item.status === "available";
+
                     return (
                       <div
                         key={idx}
-                        className="flex items-center justify-between px-5 py-3 gap-4"
+                        className="flex items-center justify-between px-5 py-3 gap-3"
                         data-testid={`row-key-${idx}`}
                       >
                         <code className="text-sm font-mono text-foreground truncate flex-1">
@@ -239,6 +258,23 @@ export default function BatchCheckPage() {
                             <Icon className="w-3 h-3" />
                             {config.label}
                           </Badge>
+                          {isAvailable && (
+                            <button
+                              onClick={() => copyKey(item.key)}
+                              className={`flex items-center justify-center w-7 h-7 rounded-md border transition-all duration-150 shrink-0 ${
+                                isCopied
+                                  ? "border-primary bg-primary/10 text-primary"
+                                  : "border-border bg-background text-muted-foreground hover-elevate"
+                              }`}
+                              title="Copy key"
+                              data-testid={`button-copy-key-${idx}`}
+                            >
+                              {isCopied
+                                ? <Check className="w-3.5 h-3.5" />
+                                : <Copy className="w-3.5 h-3.5" />
+                              }
+                            </button>
+                          )}
                         </div>
                       </div>
                     );
