@@ -11,6 +11,7 @@ import {
   CheckCircle, ExternalLink, Zap, AlertTriangle,
   Loader2, Check, User, Calendar, Package,
 } from "lucide-react";
+import { SiTelegram } from "react-icons/si";
 
 type Step = 1 | 2 | 3;
 
@@ -171,21 +172,34 @@ export default function RedeemPage() {
               Plus
             </Badge>
           </div>
-          <nav className="flex items-center gap-1">
-            <button
-              className="px-4 py-1.5 text-sm font-medium text-foreground border-b-2 border-primary"
-              data-testid="nav-redeem"
-            >
-              Redeem
-            </button>
+          <div className="flex items-center gap-3">
+            <nav className="flex items-center gap-1">
+              <button
+                className="px-4 py-1.5 text-sm font-medium text-foreground border-b-2 border-primary"
+                data-testid="nav-redeem"
+              >
+                Redeem
+              </button>
+              <a
+                href="/batch"
+                className="px-4 py-1.5 text-sm font-medium text-muted-foreground border-b-2 border-transparent"
+                data-testid="nav-batch-check"
+              >
+                Batch Check
+              </a>
+            </nav>
             <a
-              href="/batch"
-              className="px-4 py-1.5 text-sm font-medium text-muted-foreground border-b-2 border-transparent"
-              data-testid="nav-batch-check"
+              href="https://t.me/CDK_Keys?text=i%20want%20to%20purchase%20key"
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="button-telegram"
             >
-              Batch Check
+              <Button size="sm" className="gap-1.5 bg-[#229ED9] text-white border-[#1a8bbf]">
+                <SiTelegram className="w-3.5 h-3.5" />
+                Buy Key
+              </Button>
             </a>
-          </nav>
+          </div>
         </div>
       </header>
 

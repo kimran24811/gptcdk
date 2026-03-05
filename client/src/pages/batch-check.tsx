@@ -7,6 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, CheckCircle, XCircle, Clock, AlertTriangle } from "lucide-react";
+import { SiTelegram } from "react-icons/si";
 
 interface KeyStatus {
   key: string;
@@ -110,21 +111,34 @@ export default function BatchCheckPage() {
               Plus
             </Badge>
           </div>
-          <nav className="flex items-center gap-1">
+          <div className="flex items-center gap-3">
+            <nav className="flex items-center gap-1">
+              <a
+                href="/"
+                className="px-4 py-1.5 text-sm font-medium text-muted-foreground border-b-2 border-transparent"
+                data-testid="nav-redeem"
+              >
+                Redeem
+              </a>
+              <button
+                className="px-4 py-1.5 text-sm font-medium text-foreground border-b-2 border-primary"
+                data-testid="nav-batch-check"
+              >
+                Batch Check
+              </button>
+            </nav>
             <a
-              href="/"
-              className="px-4 py-1.5 text-sm font-medium text-muted-foreground border-b-2 border-transparent"
-              data-testid="nav-redeem"
+              href="https://t.me/CDK_Keys?text=i%20want%20to%20purchase%20key"
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="button-telegram"
             >
-              Redeem
+              <Button size="sm" className="gap-1.5 bg-[#229ED9] text-white border-[#1a8bbf]">
+                <SiTelegram className="w-3.5 h-3.5" />
+                Buy Key
+              </Button>
             </a>
-            <button
-              className="px-4 py-1.5 text-sm font-medium text-foreground border-b-2 border-primary"
-              data-testid="nav-batch-check"
-            >
-              Batch Check
-            </button>
-          </nav>
+          </div>
         </div>
       </header>
 
