@@ -3,6 +3,7 @@ import { createServer, type Server } from "http";
 
 const CDK_API_KEY = process.env.CDK_API_KEY || "";
 const API_BASE = "https://keys.ovh/api/v1";
+const WEB_BASE = "https://keys.ovh";
 
 async function apiCall(method: string, path: string, body?: object) {
   const res = await fetch(`${API_BASE}${path}`, {
@@ -14,6 +15,59 @@ async function apiCall(method: string, path: string, body?: object) {
     body: body ? JSON.stringify(body) : undefined,
   });
   return res.json();
+}
+
+async function webActivate(cdkKey: string, rawSessionJson: string): Promise<any> {
+  const csrfRes = await fetch(`${WEB_BASE}/sanctum/csrf-cookie`, {
+    method: "GET",
+    headers: {
+      "Accept": "application/json",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Referer": WEB_BASE,
+    },
+    redirect: "follow",
+  });
+
+  let xsrfToken = "";
+  let setCookieHeaders: string[] = [];
+  try {
+    setCookieHeaders = (csrfRes.headers as any).getSetCookie?.() || [];
+  } catch {}
+  if (!setCookieHeaders.length) {
+    const raw = csrfRes.headers.get("set-cookie") || "";
+    if (raw) setCookieHeaders = [raw];
+  }
+  console.log("[webActivate] CSRF set-cookie count:", setCookieHeaders.length);
+
+  for (const c of setCookieHeaders) {
+    const match = c.match(/XSRF-TOKEN=([^;]+)/);
+    if (match) {
+      xsrfToken = decodeURIComponent(match[1]);
+      break;
+    }
+  }
+  console.log("[webActivate] xsrfToken length:", xsrfToken.length);
+
+  const cookieHeader = setCookieHeaders.map(c => c.split(";")[0]).join("; ");
+
+  const redeemRes = await fetch(`${WEB_BASE}/api/redeem`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+      "X-XSRF-TOKEN": xsrfToken,
+      "Cookie": cookieHeader,
+      "Referer": `${WEB_BASE}/redeem`,
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Origin": WEB_BASE,
+    },
+    body: JSON.stringify({ cdk: cdkKey.trim(), token: rawSessionJson.trim() }),
+  });
+
+  console.log("[webActivate] redeem HTTP status:", redeemRes.status);
+  const data = await redeemRes.json();
+  console.log("[webActivate] redeem response:", JSON.stringify(data));
+  return { status: redeemRes.status, data };
 }
 
 function validateAccessToken(token: string): { valid: boolean; message?: string } {
@@ -193,23 +247,11 @@ export async function registerRoutes(
     }
 
     try {
-      const parsed = JSON.parse(sessionData.trim());
-      console.log("[activate] session keys:", Object.keys(parsed));
-      const userToken = parsed.sessionToken || parsed.session_token || parsed.accessToken || parsed.access_token || parsed.token;
+      const { status: httpStatus, data } = await webActivate(cdkKey, sessionData);
 
-      if (!userToken) {
-        return res.json({ success: false, message: "Could not extract user token from session data." });
+      if (httpStatus === 419) {
+        return res.json({ success: false, message: "CSRF error — please try again." });
       }
-
-      const tokenField = parsed.sessionToken ? "sessionToken" : parsed.accessToken ? "accessToken" : "token";
-      console.log("[activate] using field:", tokenField, "| prefix:", userToken.substring(0, 30), "| length:", userToken.length);
-
-      const data = await apiCall("POST", "/activate", {
-        key: cdkKey.trim(),
-        user_token: userToken,
-      });
-
-      console.log("[activate] keys.ovh response:", JSON.stringify(data));
 
       if (data.success) {
         return res.json({
@@ -221,15 +263,23 @@ export async function registerRoutes(
         });
       }
 
+      if (data.queued && data.poll_token) {
+        return res.json({ success: false, message: "Activation is queued — please check back in a few moments." });
+      }
+
       const errorMessages: Record<string, string> = {
         key_not_found: "Key not found or not available.",
+        key_invalid_or_used: "This key has already been used or is invalid.",
+        token_invalid: "Token validation failed. Please get a fresh session from the ChatGPT AuthSession page.",
+        token_premium: "Your account already has an active subscription.",
+        team_subscription: "Team subscriptions are not supported.",
         activation_failed: "Activation failed. Please check your session data and try again.",
         rate_limit_exceeded: "Too many requests. Please wait and try again.",
-        token_inactive: "API token is inactive. Please contact support.",
-        token_expired: "API token has expired. Please contact support.",
+        provider_error: "Activation provider error. Please try again.",
+        all_keys_invalid: "No valid keys available. Please contact support.",
       };
 
-      const msg = errorMessages[data.error] || data.message || "Activation failed.";
+      const msg = errorMessages[data.error] || errorMessages[data.error_code] || data.message || "Activation failed.";
       return res.json({ success: false, message: msg });
     } catch (err) {
       console.error("Activation error:", err);
