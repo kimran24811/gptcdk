@@ -1,7 +1,7 @@
 import { useLocation } from "wouter";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { SiTelegram, SiWhatsapp } from "react-icons/si";
+import { SiWhatsapp } from "react-icons/si";
 import { Zap, List, ShoppingBag } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -56,18 +56,6 @@ export function PageLayout({
               })}
             </nav>
 
-            <a
-              href="https://t.me/CDK_Keys?text=i%20want%20to%20purchase%20key"
-              target="_blank"
-              rel="noopener noreferrer"
-              data-testid="button-telegram"
-            >
-              <Button size="sm" className="gap-1.5 bg-[#229ED9] hover:bg-[#1a8bbf] text-white border-0">
-                <SiTelegram className="w-3.5 h-3.5" />
-                <span className="hidden xs:inline">Buy Key</span>
-                <span className="xs:hidden">Buy</span>
-              </Button>
-            </a>
             <a
               href="https://wa.me/+447577308067"
               target="_blank"

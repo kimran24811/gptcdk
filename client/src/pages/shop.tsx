@@ -11,7 +11,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Zap, Shield, Clock, ShoppingCart, CheckCircle, Minus, Plus, Copy, Check } from "lucide-react";
-import { SiTelegram, SiWhatsapp } from "react-icons/si";
+import { SiWhatsapp } from "react-icons/si";
 import { useToast } from "@/hooks/use-toast";
 import { PageLayout } from "@/components/page-layout";
 
@@ -66,7 +66,6 @@ const VOLUME_DISCOUNTS = [
 // ─────────────────────────────────────────────
 const BINANCE_PAY_ID = "552780449";
 const BINANCE_USERNAME = "User-1d9f7";
-const TELEGRAM_USERNAME = "CDK_Keys"; // opens t.me/CDK_Keys
 
 function useCopied(ms = 2000) {
   const [copied, setCopied] = useState(false);
@@ -112,9 +111,6 @@ function OrderDialog({
   unitPrice: number;
   totalPrice: string;
 }) {
-  const telegramUrl = `https://t.me/${TELEGRAM_USERNAME}?text=${encodeURIComponent(
-    `Hi, I sent $${totalPrice} USDT to Binance Pay ID ${BINANCE_PAY_ID} for ${plan.name} (${plan.duration}) x${quantity}. Here is my payment screenshot:`
-  )}`;
   const whatsappUrl = `https://wa.me/+447577308067?text=${encodeURIComponent(
     `Hi, I sent $${totalPrice} USDT to Binance Pay ID ${BINANCE_PAY_ID} for ${plan.name} (${plan.duration}) x${quantity}. Here is my payment screenshot:`
   )}`;
@@ -197,34 +193,20 @@ function OrderDialog({
         {/* Contact CTA */}
         <div className="space-y-2">
           <p className="text-sm text-muted-foreground">
-            After sending, share your payment screenshot with us via Telegram or WhatsApp.
+            After sending, share your payment screenshot with us on WhatsApp.
           </p>
-          <div className="grid grid-cols-2 gap-2">
-            <a
-              href={telegramUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block"
-              data-testid="button-open-telegram"
-            >
-              <Button className="w-full gap-2 bg-[#229ED9] hover:bg-[#1a8bbf] text-white border-0" size="lg">
-                <SiTelegram className="w-4 h-4" />
-                Telegram
-              </Button>
-            </a>
-            <a
-              href={whatsappUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block"
-              data-testid="button-open-whatsapp"
-            >
-              <Button className="w-full gap-2 bg-[#25D366] hover:bg-[#1ebe5d] text-white border-0" size="lg">
-                <SiWhatsapp className="w-4 h-4" />
-                WhatsApp
-              </Button>
-            </a>
-          </div>
+          <a
+            href={whatsappUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block"
+            data-testid="button-open-whatsapp"
+          >
+            <Button className="w-full gap-2 bg-[#25D366] hover:bg-[#1ebe5d] text-white border-0" size="lg">
+              <SiWhatsapp className="w-4 h-4" />
+              Share Screenshot on WhatsApp
+            </Button>
+          </a>
         </div>
       </DialogContent>
     </Dialog>
@@ -509,7 +491,7 @@ export default function ShopPage() {
                   Order — ${totalPrice} USDT
                 </Button>
                 <p className="text-xs text-muted-foreground text-center">
-                  Pay via Binance Pay · Fulfilled via Telegram or WhatsApp
+                  Pay via Binance Pay · Fulfilled via WhatsApp
                 </p>
               </div>
             </CardContent>
