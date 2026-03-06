@@ -23,7 +23,7 @@ const PLANS = [
     id: "plus-1m",
     name: "ChatGPT Plus CDK",
     duration: "1 month",
-    price: 2.45,       // base price per unit
+    price: 2.38,       // base price per unit
     fromPrice: 1.55,   // lowest price (bulk)
     popular: true,
   },
@@ -332,7 +332,7 @@ export default function ShopPage() {
                 <div className="space-y-2">
                   {VOLUME_DISCOUNTS.map((tier) => {
                     const tierTotal = (tier.price * tier.qty).toFixed(2);
-                    const savedTotal = ((selectedPlan.price - tier.price) * tier.qty).toFixed(2);
+                    const savedTotal = ((2.38 - tier.price) * tier.qty).toFixed(2);
                     const isActive = quantity >= tier.qty && (
                       VOLUME_DISCOUNTS.indexOf(tier) === VOLUME_DISCOUNTS.length - 1 ||
                       quantity < VOLUME_DISCOUNTS[VOLUME_DISCOUNTS.indexOf(tier) + 1].qty
