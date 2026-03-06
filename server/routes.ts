@@ -200,12 +200,6 @@ export async function registerRoutes(
         return res.json({ success: false, message: "Could not extract user token from session data." });
       }
 
-      // Final token check before hitting the API
-      const tokenCheck = validateAccessToken(userToken);
-      if (!tokenCheck.valid) {
-        return res.json({ success: false, message: tokenCheck.message });
-      }
-
       const data = await apiCall("POST", "/activate", {
         key: cdkKey.trim(),
         user_token: userToken,
