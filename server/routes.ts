@@ -195,13 +195,14 @@ export async function registerRoutes(
     try {
       const parsed = JSON.parse(sessionData.trim());
       console.log("[activate] session keys:", Object.keys(parsed));
-      const userToken = parsed.accessToken || parsed.access_token || parsed.token;
+      const userToken = parsed.sessionToken || parsed.session_token || parsed.accessToken || parsed.access_token || parsed.token;
 
       if (!userToken) {
         return res.json({ success: false, message: "Could not extract user token from session data." });
       }
 
-      console.log("[activate] token prefix:", userToken.substring(0, 30), "| length:", userToken.length);
+      const tokenField = parsed.sessionToken ? "sessionToken" : parsed.accessToken ? "accessToken" : "token";
+      console.log("[activate] using field:", tokenField, "| prefix:", userToken.substring(0, 30), "| length:", userToken.length);
 
       const data = await apiCall("POST", "/activate", {
         key: cdkKey.trim(),
