@@ -6,10 +6,11 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContentRaw } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import {
   CheckCircle, ExternalLink, Zap, AlertTriangle,
-  Loader2, Check, User, Calendar, Package,
+  Loader2, Check, Mail, RotateCcw,
 } from "lucide-react";
 import { PageLayout } from "@/components/page-layout";
 
@@ -153,6 +154,47 @@ export default function RedeemPage() {
 
   return (
     <PageLayout>
+      {/* ── Success Modal ── */}
+      <Dialog open={!!activationResult} onOpenChange={(open) => { if (!open) resetFlow(); }}>
+        <DialogContentRaw className="sm:max-w-xs mx-4 bg-[#111827] border-0 p-0 overflow-hidden">
+          <div className="flex flex-col items-center gap-5 p-8 text-center">
+            <div className="w-20 h-20 rounded-full bg-[#22c55e] flex items-center justify-center shadow-lg shadow-green-500/30">
+              <CheckCircle className="w-10 h-10 text-white" strokeWidth={2.5} />
+            </div>
+            <div>
+              <h2 className="text-xl font-bold text-white" data-testid="text-success-title">Activation Successful!</h2>
+              <p className="text-gray-400 text-sm mt-1">Your subscription has been activated successfully.</p>
+            </div>
+            {activationResult?.email && (
+              <div
+                className="flex items-center gap-2 px-4 py-2 rounded-full bg-[#14532d]/60 border border-[#22c55e]/40 text-[#4ade80] text-sm font-medium"
+                data-testid="text-activation-email"
+              >
+                <Mail className="w-4 h-4 shrink-0" />
+                <span className="truncate max-w-[220px]">{activationResult.email}</span>
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-3 w-full pt-1">
+              <button
+                onClick={resetFlow}
+                className="px-4 py-2.5 rounded-lg bg-[#1f2937] text-white text-sm font-medium hover:bg-[#374151] transition-colors"
+                data-testid="button-success-close"
+              >
+                Close
+              </button>
+              <button
+                onClick={resetFlow}
+                className="px-4 py-2.5 rounded-lg bg-[#22c55e] text-white text-sm font-medium hover:bg-[#16a34a] transition-colors flex items-center justify-center gap-2"
+                data-testid="button-success-one-more"
+              >
+                <RotateCcw className="w-4 h-4" />
+                One More
+              </button>
+            </div>
+          </div>
+        </DialogContentRaw>
+      </Dialog>
+
       <div className="mb-6 sm:mb-8">
         <h1 className="text-2xl sm:text-3xl font-bold text-foreground mb-1">Redeem CDK</h1>
         <p className="text-muted-foreground text-sm">Safe and fast subscription activation service</p>
@@ -160,79 +202,8 @@ export default function RedeemPage() {
 
       <StepIndicator current={step} />
 
-      {step === 3 && activationResult ? (
-        <Card className="border border-card-border">
-          <CardContent className="py-10 sm:py-12 flex flex-col items-center gap-5 sm:gap-6 text-center px-4 sm:px-6">
-            <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-primary/10 flex items-center justify-center">
-              <CheckCircle className="w-8 h-8 sm:w-10 sm:h-10 text-primary" />
-            </div>
-            <div>
-              <h2 className="text-xl sm:text-2xl font-bold text-foreground mb-1">Activation Successful!</h2>
-              <p className="text-muted-foreground text-sm">
-                Your subscription has been activated successfully.
-              </p>
-            </div>
-
-            {(activationResult.email || activationResult.product || activationResult.subscription) && (
-              <div className="w-full max-w-sm rounded-md border border-card-border bg-muted/40 divide-y divide-border text-sm text-left">
-                {activationResult.email && (
-                  <div className="flex items-center gap-3 px-4 py-3">
-                    <User className="w-4 h-4 text-muted-foreground shrink-0" />
-                    <div className="min-w-0">
-                      <div className="text-xs text-muted-foreground mb-0.5">Account</div>
-                      <div className="font-medium text-foreground truncate" data-testid="text-activation-email">{activationResult.email}</div>
-                    </div>
-                  </div>
-                )}
-                {activationResult.product && (
-                  <div className="flex items-center gap-3 px-4 py-3">
-                    <Package className="w-4 h-4 text-muted-foreground shrink-0" />
-                    <div>
-                      <div className="text-xs text-muted-foreground mb-0.5">Product</div>
-                      <div className="font-medium text-foreground" data-testid="text-activation-product">{activationResult.product}</div>
-                    </div>
-                  </div>
-                )}
-                {activationResult.subscription && (
-                  <div className="flex items-center gap-3 px-4 py-3">
-                    <Zap className="w-4 h-4 text-muted-foreground shrink-0" />
-                    <div>
-                      <div className="text-xs text-muted-foreground mb-0.5">Subscription</div>
-                      <div className="font-medium text-foreground" data-testid="text-activation-subscription">{activationResult.subscription}</div>
-                    </div>
-                  </div>
-                )}
-                {activationResult.activatedAt && (
-                  <div className="flex items-center gap-3 px-4 py-3">
-                    <Calendar className="w-4 h-4 text-muted-foreground shrink-0" />
-                    <div>
-                      <div className="text-xs text-muted-foreground mb-0.5">Activated at</div>
-                      <div className="font-medium text-foreground" data-testid="text-activation-date">
-                        {new Date(activationResult.activatedAt).toLocaleString()}
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            <div className="p-4 rounded-md bg-accent/50 border border-accent-border text-accent-foreground text-sm max-w-sm w-full">
-              <div className="flex items-start gap-2">
-                <AlertTriangle className="w-4 h-4 text-yellow-600 dark:text-yellow-400 mt-0.5 shrink-0" />
-                <span>
-                  After activation, try refreshing the ChatGPT page multiple times. The page will refresh itself to update the subscription status.
-                </span>
-              </div>
-            </div>
-
-            <Button variant="outline" onClick={resetFlow} data-testid="button-redeem-again">
-              Redeem Another
-            </Button>
-          </CardContent>
-        </Card>
-      ) : (
-        <Card className="border border-card-border">
-          <CardContent className="p-4 sm:p-6 space-y-6 sm:space-y-8">
+      <Card className="border border-card-border">
+        <CardContent className="p-4 sm:p-6 space-y-6 sm:space-y-8">
             {/* Step 1 — CDK */}
             <div>
               <h2 className="text-base font-semibold text-foreground mb-3 sm:mb-4">
@@ -360,7 +331,7 @@ export default function RedeemPage() {
               className="w-full gap-2"
               size="lg"
               onClick={() => activate.mutate()}
-              disabled={!sessionValidated || step < 2 || activate.isPending}
+              disabled={!sessionValidated || step !== 2 || activate.isPending}
               data-testid="button-activate"
             >
               {activate.isPending ? (
@@ -379,7 +350,6 @@ export default function RedeemPage() {
             </div>
           </CardContent>
         </Card>
-      )}
     </PageLayout>
   );
 }

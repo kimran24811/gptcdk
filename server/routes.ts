@@ -17,6 +17,34 @@ async function apiCall(method: string, path: string, body?: object) {
   return res.json();
 }
 
+async function pollActivationStatus(pollToken: string, cookieHeader: string, xsrfToken: string): Promise<any> {
+  for (let i = 0; i < 30; i++) {
+    await new Promise(r => setTimeout(r, 3000));
+    try {
+      const res = await fetch(`${WEB_BASE}/api/activation/${pollToken}/status`, {
+        headers: {
+          "Accept": "application/json",
+          "Cookie": cookieHeader,
+          "X-XSRF-TOKEN": xsrfToken,
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Referer": `${WEB_BASE}/redeem`,
+        },
+      });
+      const result = await res.json();
+      console.log("[pollActivation] poll attempt", i + 1, "status:", result.status || JSON.stringify(result));
+      if (result.status === "success") {
+        return { success: true, data: { email: result.email, task_id: result.task_id } };
+      }
+      if (result.status === "failed") {
+        return { success: false, error_code: result.error_code, message: result.message };
+      }
+    } catch (e) {
+      console.error("[pollActivation] error:", e);
+    }
+  }
+  return { success: false, message: "Activation timed out. Please check your ChatGPT account — it may have been activated." };
+}
+
 async function webActivate(cdkKey: string, rawSessionJson: string): Promise<any> {
   const csrfRes = await fetch(`${WEB_BASE}/sanctum/csrf-cookie`, {
     method: "GET",
@@ -67,6 +95,13 @@ async function webActivate(cdkKey: string, rawSessionJson: string): Promise<any>
   console.log("[webActivate] redeem HTTP status:", redeemRes.status);
   const data = await redeemRes.json();
   console.log("[webActivate] redeem response:", JSON.stringify(data));
+
+  if (data.queued && data.poll_token) {
+    console.log("[webActivate] activation queued, polling for result...");
+    const pollResult = await pollActivationStatus(data.poll_token, cookieHeader, xsrfToken);
+    return { status: 200, data: pollResult };
+  }
+
   return { status: redeemRes.status, data };
 }
 
