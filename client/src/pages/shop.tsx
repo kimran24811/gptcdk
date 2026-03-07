@@ -23,42 +23,50 @@ const PLANS = [
     id: "plus-1m",
     name: "ChatGPT Plus CDK",
     duration: "1 month",
-    price: 2.38,       // base price per unit
-    fromPrice: 1.55,   // lowest price (bulk)
+    price: 2.28,
+    fromPrice: 1.93,
     popular: true,
+    discounts: [
+      { qty: 10, price: 2.15, pct: -6 },
+      { qty: 30, price: 1.93, pct: -15 },
+    ],
   },
   {
     id: "plus-1y",
     name: "ChatGPT Plus CDK",
     duration: "1 year",
-    price: 28,
-    fromPrice: 28,
+    price: 23,
+    fromPrice: 18,
     popular: false,
+    discounts: [
+      { qty: 3, price: 22, pct: -4 },
+      { qty: 5, price: 18, pct: -22 },
+    ],
   },
   {
     id: "go-1y",
     name: "ChatGPT GO CDK",
     duration: "1 year",
-    price: 5,
-    fromPrice: 5,
+    price: 4.5,
+    fromPrice: 3,
     popular: false,
+    discounts: [
+      { qty: 2,  price: 4, pct: -11 },
+      { qty: 11, price: 3, pct: -33 },
+    ],
   },
   {
     id: "pro-1m",
     name: "ChatGPT Pro CDK",
     duration: "1 month",
-    price: 110,
-    fromPrice: 110,
+    price: 90,
+    fromPrice: 66.67,
     popular: false,
+    discounts: [
+      { qty: 2, price: 75,    pct: -17 },  // 2 keys = $150
+      { qty: 3, price: 66.67, pct: -26 },  // 3 keys = $200
+    ],
   },
-];
-
-// Volume discounts — only applies to Plus 1M plan
-const VOLUME_DISCOUNTS = [
-  { qty: 10,  price: 2.15, pct: -12 },
-  { qty: 30,  price: 1.95, pct: -20 },
-  { qty: 50,  price: 1.75, pct: -29 },
-  { qty: 100, price: 1.55, pct: -37 },
 ];
 
 // ─────────────────────────────────────────────
@@ -221,9 +229,10 @@ export default function ShopPage() {
   const [orderOpen, setOrderOpen] = useState(false);
 
   const unitPrice = (() => {
-    if (selectedPlan.id !== "plus-1m") return selectedPlan.price;
-    const discount = VOLUME_DISCOUNTS.slice().reverse().find((d) => quantity >= d.qty);
-    return discount ? discount.price : selectedPlan.price;
+    const discounts = selectedPlan.discounts;
+    if (!discounts || discounts.length === 0) return selectedPlan.price;
+    const match = discounts.slice().reverse().find((d) => quantity >= d.qty);
+    return match ? match.price : selectedPlan.price;
   })();
 
   const totalPrice = (unitPrice * quantity).toFixed(2);
@@ -248,9 +257,8 @@ export default function ShopPage() {
     setOrderOpen(true);
   };
 
-  const appliedDiscount = selectedPlan.id === "plus-1m"
-    ? VOLUME_DISCOUNTS.slice().reverse().find((d) => quantity >= d.qty)
-    : null;
+  const planDiscounts = selectedPlan.discounts || [];
+  const appliedDiscount = planDiscounts.slice().reverse().find((d) => quantity >= d.qty) ?? null;
 
   return (
     <PageLayout maxWidth="max-w-5xl">
@@ -320,7 +328,7 @@ export default function ShopPage() {
           </Card>
 
           {/* Volume Discounts */}
-          {selectedPlan.id === "plus-1m" && (
+          {planDiscounts.length > 0 && (
             <Card className="border border-card-border">
               <CardContent className="p-4 sm:p-5">
                 <div className="flex items-center gap-2 mb-1">
@@ -329,13 +337,12 @@ export default function ShopPage() {
                 </div>
                 <p className="text-xs text-muted-foreground mb-4">Tap a row to apply it instantly</p>
                 <div className="space-y-2">
-                  {VOLUME_DISCOUNTS.map((tier) => {
+                  {planDiscounts.map((tier, i) => {
+                    const nextTier = planDiscounts[i + 1];
+                    const rangeLabel = nextTier ? `${tier.qty}–${nextTier.qty - 1}` : `${tier.qty}+`;
                     const tierTotal = (tier.price * tier.qty).toFixed(2);
-                    const savedTotal = ((2.38 - tier.price) * tier.qty).toFixed(2);
-                    const isActive = quantity >= tier.qty && (
-                      VOLUME_DISCOUNTS.indexOf(tier) === VOLUME_DISCOUNTS.length - 1 ||
-                      quantity < VOLUME_DISCOUNTS[VOLUME_DISCOUNTS.indexOf(tier) + 1].qty
-                    );
+                    const savedTotal = ((selectedPlan.price - tier.price) * tier.qty).toFixed(2);
+                    const isActive = quantity >= tier.qty && (!nextTier || quantity < nextTier.qty);
                     return (
                       <button
                         key={tier.qty}
@@ -347,13 +354,13 @@ export default function ShopPage() {
                       >
                         <div className="flex items-center justify-between gap-2">
                           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-                            <span className={`text-sm font-medium w-10 shrink-0 ${isActive ? "text-primary" : "text-muted-foreground"}`}>
-                              ≥{tier.qty}
+                            <span className={`text-sm font-medium w-12 shrink-0 ${isActive ? "text-primary" : "text-muted-foreground"}`}>
+                              {rangeLabel}
                             </span>
                             <div className="min-w-0">
                               <div className="flex items-baseline gap-1.5">
                                 <span className="text-base font-bold text-foreground">${tier.price.toFixed(2)}</span>
-                                <span className="text-xs text-muted-foreground">/ unit</span>
+                                <span className="text-xs text-muted-foreground">/ key</span>
                               </div>
                               <div className="text-xs text-muted-foreground mt-0.5">
                                 {tier.qty} keys = <span className="font-semibold text-foreground">${tierTotal}</span>
