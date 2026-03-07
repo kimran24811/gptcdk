@@ -1,5 +1,0 @@
-[build]
-buildCommand = "npm install && npx vite build && npx esbuild server/index.ts --bundle --platform=node --format=cjs --outfile=dist/index.cjs"
-
-[deploy]
-startCommand = "node dist/index.cjs"
