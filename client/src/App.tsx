@@ -9,6 +9,7 @@ import RedeemPage from "@/pages/redeem";
 import BatchCheckPage from "@/pages/batch-check";
 import ShopPage from "@/pages/shop";
 import { Dialog, DialogContentRaw, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { ThemeProvider } from "@/components/theme-provider";
 import { Sparkles, Bell } from "lucide-react";
 
 function AnnouncementPopup() {
@@ -76,13 +77,15 @@ function Router() {
 
 function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <Toaster />
-        <AnnouncementPopup />
-        <Router />
-      </TooltipProvider>
-    </QueryClientProvider>
+    <ThemeProvider>
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <Toaster />
+          <AnnouncementPopup />
+          <Router />
+        </TooltipProvider>
+      </QueryClientProvider>
+    </ThemeProvider>
   );
 }
 

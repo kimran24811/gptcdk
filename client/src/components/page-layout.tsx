@@ -2,7 +2,8 @@ import { useLocation } from "wouter";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SiWhatsapp } from "react-icons/si";
-import { Zap, List, ShoppingBag } from "lucide-react";
+import { Zap, List, ShoppingBag, Sun, Moon } from "lucide-react";
+import { useTheme } from "@/components/theme-provider";
 
 const NAV_ITEMS = [
   { href: "/", label: "Redeem", icon: Zap },
@@ -18,6 +19,7 @@ export function PageLayout({
   maxWidth?: string;
 }) {
   const [location] = useLocation();
+  const { theme, toggle } = useTheme();
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -55,6 +57,21 @@ export function PageLayout({
                 );
               })}
             </nav>
+
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={toggle}
+              className="w-8 h-8 p-0"
+              data-testid="button-theme-toggle"
+              aria-label="Toggle theme"
+            >
+              {theme === "dark" ? (
+                <Sun className="w-4 h-4" />
+              ) : (
+                <Moon className="w-4 h-4" />
+              )}
+            </Button>
 
             <a
               href="https://wa.me/+447577308067"
