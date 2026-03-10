@@ -246,7 +246,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!purchaseData.success) {
         const errMap: Record<string, string> = {
           out_of_stock: "This plan is currently out of stock.",
-          insufficient_balance: "Supplier balance issue. Please contact support.",
+          insufficient_balance: "We are unable to process your order at this time. Please contact us on WhatsApp: +447577308067",
           product_not_found: "Product not found.",
           subscription_not_found: "Subscription type not found.",
         };
