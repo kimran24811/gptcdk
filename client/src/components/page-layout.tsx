@@ -70,7 +70,7 @@ export function PageLayout({
             {user && !isAdmin && (
               <a
                 href="/account"
-                className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-primary/10 border border-primary/20 text-primary text-xs font-semibold hover:bg-primary/20 transition-colors"
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-primary/10 border border-primary/20 text-primary text-xs font-semibold hover:bg-primary/20 transition-colors"
                 data-testid="text-header-balance"
               >
                 {formatBalance(user.balanceCents)}
