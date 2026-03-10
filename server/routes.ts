@@ -98,15 +98,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/auth/register", async (req, res) => {
     const { email, password, name } = req.body;
     if (!email || !password || !name) {
-      return res.status(400).json({ success: false, message: "Name, email and password are required." });
+      return res.json({ success: false, message: "Name, email and password are required." });
     }
     if (password.length < 6) {
-      return res.status(400).json({ success: false, message: "Password must be at least 6 characters." });
+      return res.json({ success: false, message: "Password must be at least 6 characters." });
     }
     try {
       const [existing] = await db.select().from(users).where(eq(users.email, email.toLowerCase()));
       if (existing) {
-        return res.status(400).json({ success: false, message: "An account with this email already exists." });
+        return res.json({ success: false, message: "An account with this email already exists." });
       }
       const hash = await bcrypt.hash(password, 10);
       const [user] = await db.insert(users).values({
@@ -127,16 +127,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/auth/login", async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) {
-      return res.status(400).json({ success: false, message: "Email and password are required." });
+      return res.json({ success: false, message: "Email and password are required." });
     }
     try {
       const [user] = await db.select().from(users).where(eq(users.email, email.toLowerCase()));
       if (!user) {
-        return res.status(401).json({ success: false, message: "Invalid email or password." });
+        return res.json({ success: false, message: "Invalid email or password." });
       }
       const match = await bcrypt.compare(password, user.passwordHash);
       if (!match) {
-        return res.status(401).json({ success: false, message: "Invalid email or password." });
+        return res.json({ success: false, message: "Invalid email or password." });
       }
       req.session.userId = user.id;
       return res.json({ success: true, user: { id: user.id, email: user.email, name: user.name, role: user.role, balanceCents: user.balanceCents } });
@@ -184,33 +184,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/purchase", requireAuth, async (req, res) => {
     const { planId, quantity } = req.body;
     if (!planId || !quantity || quantity < 1 || quantity > 100) {
-      return res.status(400).json({ success: false, message: "Valid plan and quantity (1–100) are required." });
+      return res.json({ success: false, message: "Valid plan and quantity (1–100) are required." });
     }
 
     const planSlug = PLAN_SLUG_MAP[planId];
     if (!planSlug) {
-      return res.status(400).json({ success: false, message: "Invalid plan selected." });
+      return res.json({ success: false, message: "Invalid plan selected." });
     }
 
     try {
       const [user] = await db.select().from(users).where(eq(users.id, req.session.userId!));
       if (!user) {
-        return res.status(401).json({ success: false, message: "User not found." });
+        return res.json({ success: false, message: "User not found." });
       }
 
       // Fetch current price from API
       const productsData = await apiCall("GET", "/products");
       if (!productsData.success) {
-        return res.status(502).json({ success: false, message: "Could not fetch current pricing." });
+        return res.json({ success: false, message: "Could not fetch current pricing." });
       }
 
       const product = productsData.data?.find((p: any) => p.slug === planSlug.product_slug);
       const subType = product?.subscription_types?.find((s: any) => s.slug === planSlug.subscription_type_slug);
       if (!subType) {
-        return res.status(400).json({ success: false, message: "Selected plan is not available." });
+        return res.json({ success: false, message: "Selected plan is not available." });
       }
       if (!subType.in_stock) {
-        return res.status(400).json({ success: false, message: "This plan is currently out of stock." });
+        return res.json({ success: false, message: "This plan is currently out of stock." });
       }
 
       // Apply volume pricing
@@ -225,7 +225,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       if (user.balanceCents < totalCents) {
         const shortfall = ((totalCents - user.balanceCents) / 100).toFixed(2);
-        return res.status(402).json({
+        return res.json({
           success: false,
           message: `Insufficient balance. You need $${shortfall} more. Please top up your account.`,
           code: "insufficient_balance",
@@ -251,7 +251,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           subscription_not_found: "Subscription type not found.",
         };
         const msg = errMap[purchaseData.error] || purchaseData.message || "Purchase failed. Please try again.";
-        return res.status(400).json({ success: false, message: msg });
+        return res.json({ success: false, message: msg });
       }
 
       const purchasedKeys: string[] = purchaseData.data?.keys || [];
@@ -320,14 +320,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const customerId = parseInt(req.params.id, 10);
     const { amountUsd, description } = req.body;
     if (!amountUsd || isNaN(parseFloat(amountUsd)) || parseFloat(amountUsd) <= 0) {
-      return res.status(400).json({ success: false, message: "Valid amount in USD is required." });
+      return res.json({ success: false, message: "Valid amount in USD is required." });
     }
     const amountCents = Math.round(parseFloat(amountUsd) * 100);
     const desc = description?.trim() || `Manual top-up by admin`;
     try {
       const [user] = await db.select().from(users).where(eq(users.id, customerId));
       if (!user) {
-        return res.status(404).json({ success: false, message: "Customer not found." });
+        return res.json({ success: false, message: "Customer not found." });
       }
       const newBalance = user.balanceCents + amountCents;
       await db.update(users).set({ balanceCents: newBalance }).where(eq(users.id, customerId));
@@ -379,7 +379,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const [user] = await db.select().from(users).where(eq(users.id, req.session.userId!));
       if (!user) {
-        return res.status(404).json({ success: false, message: "User not found." });
+        return res.json({ success: false, message: "User not found." });
       }
 
       const updates: Partial<typeof users.$inferInsert> = {};
@@ -389,21 +389,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (email && email.trim() && email.toLowerCase() !== user.email) {
         const [existing] = await db.select().from(users).where(eq(users.email, email.toLowerCase()));
         if (existing) {
-          return res.status(400).json({ success: false, message: "That email is already in use." });
+          return res.json({ success: false, message: "That email is already in use." });
         }
         updates.email = email.toLowerCase().trim();
       }
 
       if (newPassword) {
         if (!currentPassword) {
-          return res.status(400).json({ success: false, message: "Current password is required to set a new password." });
+          return res.json({ success: false, message: "Current password is required to set a new password." });
         }
         const match = await bcrypt.compare(currentPassword, user.passwordHash);
         if (!match) {
-          return res.status(400).json({ success: false, message: "Current password is incorrect." });
+          return res.json({ success: false, message: "Current password is incorrect." });
         }
         if (newPassword.length < 6) {
-          return res.status(400).json({ success: false, message: "New password must be at least 6 characters." });
+          return res.json({ success: false, message: "New password must be at least 6 characters." });
         }
         updates.passwordHash = await bcrypt.hash(newPassword, 10);
       }
@@ -438,7 +438,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/validate-cdk", async (req, res) => {
     const { key } = req.body;
     if (!key || typeof key !== "string" || key.trim().length === 0) {
-      return res.status(400).json({ valid: false, message: "CDK key is required." });
+      return res.json({ valid: false, message: "CDK key is required." });
     }
     try {
       const data = await apiCall("GET", `/key/${encodeURIComponent(key.trim())}/status`);
@@ -464,7 +464,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/validate-session", async (req, res) => {
     const { sessionData } = req.body;
     if (!sessionData || typeof sessionData !== "string") {
-      return res.status(400).json({ valid: false, message: "Session data is required." });
+      return res.json({ valid: false, message: "Session data is required." });
     }
     try {
       const parsed = JSON.parse(sessionData.trim());
@@ -507,17 +507,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/activate", async (req, res) => {
     const { cdkKey, sessionData } = req.body;
     if (!cdkKey || !sessionData) {
-      return res.status(400).json({ success: false, message: "CDK key and session data are required." });
+      return res.json({ success: false, message: "CDK key and session data are required." });
     }
     let accessToken: string;
     try {
       const parsed = JSON.parse(sessionData.trim());
       accessToken = parsed.accessToken || parsed.access_token || parsed.token;
       if (!accessToken) {
-        return res.status(400).json({ success: false, message: "No accessToken found in session data." });
+        return res.json({ success: false, message: "No accessToken found in session data." });
       }
     } catch {
-      return res.status(400).json({ success: false, message: "Invalid session data — could not parse JSON." });
+      return res.json({ success: false, message: "Invalid session data — could not parse JSON." });
     }
     try {
       console.log("[activate] calling /api/v1/activate for key:", cdkKey.trim().slice(0, 8) + "...");
@@ -544,10 +544,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/batch-status", async (req, res) => {
     const { keys } = req.body;
     if (!Array.isArray(keys) || keys.length === 0) {
-      return res.status(400).json({ success: false, message: "An array of keys is required." });
+      return res.json({ success: false, message: "An array of keys is required." });
     }
     if (keys.length > 500) {
-      return res.status(400).json({ success: false, message: "Maximum 500 keys per request." });
+      return res.json({ success: false, message: "Maximum 500 keys per request." });
     }
     try {
       const data = await apiCall("POST", "/keys/batch-status", { keys });
