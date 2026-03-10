@@ -8,6 +8,10 @@ import NotFound from "@/pages/not-found";
 import RedeemPage from "@/pages/redeem";
 import BatchCheckPage from "@/pages/batch-check";
 import ShopPage from "@/pages/shop";
+import LoginPage from "@/pages/login";
+import RegisterPage from "@/pages/register";
+import AccountPage from "@/pages/account";
+import AdminPage from "@/pages/admin";
 import { Dialog, DialogContentRaw, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Sparkles, Bell } from "lucide-react";
@@ -70,6 +74,10 @@ function Router() {
       <Route path="/" component={RedeemPage} />
       <Route path="/batch" component={BatchCheckPage} />
       <Route path="/shop" component={ShopPage} />
+      <Route path="/login" component={LoginPage} />
+      <Route path="/register" component={RegisterPage} />
+      <Route path="/account" component={AccountPage} />
+      <Route path="/admin" component={AdminPage} />
       <Route component={NotFound} />
     </Switch>
   );

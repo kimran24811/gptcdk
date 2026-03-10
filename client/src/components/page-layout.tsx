@@ -2,14 +2,13 @@ import { useLocation } from "wouter";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SiWhatsapp } from "react-icons/si";
-import { Zap, List, ShoppingBag, Sun, Moon } from "lucide-react";
+import { Zap, List, ShoppingBag, Sun, Moon, User, LayoutDashboard, LogOut, LogIn } from "lucide-react";
 import { useTheme } from "@/components/theme-provider";
+import { useAuth } from "@/hooks/use-auth";
 
-const NAV_ITEMS = [
-  { href: "/", label: "Redeem", icon: Zap },
-  { href: "/batch", label: "Batch Check", icon: List },
-  { href: "/shop", label: "Shop", icon: ShoppingBag },
-];
+function formatBalance(cents: number) {
+  return `$${(cents / 100).toFixed(2)}`;
+}
 
 export function PageLayout({
   children,
@@ -20,6 +19,15 @@ export function PageLayout({
 }) {
   const [location] = useLocation();
   const { theme, toggle } = useTheme();
+  const { user, isAdmin, logout } = useAuth();
+
+  const NAV_ITEMS = [
+    { href: "/", label: "Redeem", icon: Zap },
+    { href: "/batch", label: "Batch Check", icon: List },
+    { href: "/shop", label: "Shop", icon: ShoppingBag },
+    ...(user ? [{ href: "/account", label: "Account", icon: User }] : []),
+    ...(isAdmin ? [{ href: "/admin", label: "Admin", icon: LayoutDashboard }] : []),
+  ];
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -27,16 +35,16 @@ export function PageLayout({
       <header className="border-b border-border bg-background sticky top-0 z-50">
         <div className={`${maxWidth} mx-auto px-4 h-14 flex items-center justify-between`}>
           {/* Logo */}
-          <div className="flex items-center gap-2.5">
+          <a href="/" className="flex items-center gap-2.5">
             <span className="font-bold text-foreground text-base sm:text-lg tracking-tight">
               ChatGPT Recharge
             </span>
             <Badge variant="default" className="text-xs" data-testid="badge-plus">
               Plus
             </Badge>
-          </div>
+          </a>
 
-          {/* Desktop nav + button */}
+          {/* Desktop nav + controls */}
           <div className="flex items-center gap-2 sm:gap-3">
             <nav className="hidden sm:flex items-center gap-0.5">
               {NAV_ITEMS.map((item) => {
@@ -58,6 +66,17 @@ export function PageLayout({
               })}
             </nav>
 
+            {/* Balance pill (logged in customers) */}
+            {user && !isAdmin && (
+              <a
+                href="/account"
+                className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-primary/10 border border-primary/20 text-primary text-xs font-semibold hover:bg-primary/20 transition-colors"
+                data-testid="text-header-balance"
+              >
+                {formatBalance(user.balanceCents)}
+              </a>
+            )}
+
             <Button
               variant="ghost"
               size="sm"
@@ -72,6 +91,26 @@ export function PageLayout({
                 <Moon className="w-4 h-4" />
               )}
             </Button>
+
+            {user ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => logout.mutate()}
+                className="gap-1.5 text-muted-foreground hover:text-foreground"
+                data-testid="button-logout"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span className="hidden xs:inline">Logout</span>
+              </Button>
+            ) : (
+              <a href="/login" data-testid="link-login-header">
+                <Button size="sm" variant="ghost" className="gap-1.5">
+                  <LogIn className="w-3.5 h-3.5" />
+                  <span className="hidden xs:inline">Login</span>
+                </Button>
+              </a>
+            )}
 
             <a
               href="https://wa.me/+447577308067"
@@ -96,7 +135,7 @@ export function PageLayout({
 
       {/* ── MOBILE BOTTOM NAV ── */}
       <nav className="sm:hidden fixed bottom-0 inset-x-0 z-50 bg-background border-t border-border">
-        <div className="grid grid-cols-3 h-16">
+        <div className={`grid h-16`} style={{ gridTemplateColumns: `repeat(${NAV_ITEMS.length}, 1fr)` }}>
           {NAV_ITEMS.map((item) => {
             const active = location === item.href;
             const Icon = item.icon;

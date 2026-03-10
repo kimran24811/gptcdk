@@ -1,12 +1,10 @@
-# CDK Key Validator
+# ChatGPT Recharge — CDK Key Service
 
 ## Overview
 
-This is a CDK (Content Delivery Key) validation and redemption web application. It allows users to:
-- **Redeem a single key** via a step-by-step wizard on the main page (`/`)
-- **Batch check multiple keys** at once on the `/batch` page
+A full-stack web application for ChatGPT CDK subscription key management. Customers register, top up their balance via Binance Pay, then buy keys instantly from the shop. Keys are delivered via keys.ovh API and shown on screen immediately.
 
-The app acts as a proxy to an external key management API (`https://keys.ovh/api/v1`), keeping the API credentials server-side. The frontend is a React SPA served by an Express backend.
+Live at: **gptcdk.xyz**
 
 ---
 
@@ -22,41 +20,100 @@ Preferred communication style: Simple, everyday language.
 
 - **Framework**: React 18 with TypeScript
 - **Routing**: `wouter` (lightweight client-side routing)
-- **State/Data fetching**: TanStack React Query v5 for server state management
-- **UI components**: shadcn/ui (built on Radix UI primitives) with Tailwind CSS
+- **State/Data fetching**: TanStack React Query v5 (queries and mutations)
+- **UI components**: shadcn/ui (Radix UI primitives) with Tailwind CSS
 - **Build tool**: Vite
-- **Styling**: Tailwind CSS with CSS custom properties for theming (light/dark mode support via HSL variables)
-- **Font**: DM Sans, Fira Code, Geist Mono, Architects Daughter (Google Fonts)
+- **Styling**: Tailwind CSS with HSL CSS custom properties, dark mode via `.dark` class
+- **Theme**: ThemeProvider in `client/src/components/theme-provider.tsx`, defaults to dark
+- **Auth state**: `useAuth()` hook in `client/src/hooks/use-auth.ts` (wraps `/api/auth/me` query)
 
-**Key pages:**
-- `client/src/pages/redeem.tsx` — 3-step key redemption wizard (enter key → confirm product → success)
-- `client/src/pages/batch-check.tsx` — paste multiple keys, check all statuses at once
+**Pages:**
+| Route | Page | Access |
+|---|---|---|
+| `/` | Redeem CDK — 3-step activation wizard | Public |
+| `/batch` | Batch Key Check | Public |
+| `/shop` | Shop — buy keys with balance | Login required |
+| `/account` | My Account — balance + order history | Login required |
+| `/admin` | Admin Panel — customers + orders | Admin only |
+| `/login` | Login | Public |
+| `/register` | Register | Public |
+
+**Key features:**
+- `?key=XXXXX` URL param on `/` pre-fills and auto-validates CDK key (from "Redeem →" shortcuts)
+- Shop order panel shows balance and disables "Buy Now" if insufficient
+- Success dialog shows delivered keys with Copy + Redeem shortcuts per key
+- Account page shows expandable order history with keys, copy + redeem per key
 
 ### Backend (Express)
 
-- **Framework**: Express 5 (Node.js)
-- **Language**: TypeScript, run with `tsx` in dev, bundled with esbuild for production
-- **Routes** (`server/routes.ts`):
-  - `GET /api/products` — fetches available products from the external API
-  - `POST /api/validate-cdk` — validates a single key against the external API
-  - `POST /api/batch-check` — checks multiple keys in batch (implied by client usage)
-- **Static serving**: In production, serves the Vite-built frontend from `dist/public`; in dev, Vite runs as middleware
+- **Framework**: Express (Node.js) with TypeScript via `tsx`
+- **Session**: `express-session` with `connect-pg-simple` store (sessions in Postgres)
+- **Auth**: bcrypt password hashing, session-based auth
 
-### Data Storage
+**API Routes:**
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| POST | `/api/auth/register` | — | Register customer |
+| POST | `/api/auth/login` | — | Login |
+| POST | `/api/auth/logout` | — | Logout |
+| GET | `/api/auth/me` | — | Current user |
+| GET | `/api/me/orders` | User | Customer's order history |
+| POST | `/api/purchase` | User | Buy keys (balance check → keys.ovh → deduct) |
+| GET | `/api/admin/customers` | Admin | All customers |
+| POST | `/api/admin/customers/:id/credit` | Admin | Add balance to customer |
+| GET | `/api/admin/orders` | Admin | All orders across all users |
+| GET | `/api/products` | — | keys.ovh product list |
+| POST | `/api/validate-cdk` | — | Validate CDK key status |
+| POST | `/api/validate-session` | — | Validate ChatGPT session JSON |
+| POST | `/api/activate` | — | Activate CDK with user session |
+| POST | `/api/batch-status` | — | Batch key status check |
 
-- **Schema** (`shared/schema.ts`): Drizzle ORM with PostgreSQL dialect. Defines a `users` table with `id`, `username`, `password`.
-- **Current storage**: `server/storage.ts` uses an in-memory `MemStorage` class (a `Map`). The database schema exists but the app currently doesn't use Postgres at runtime — it's ready to be wired up.
-- **Migrations**: Drizzle Kit configured to push schema to PostgreSQL via `DATABASE_URL` env variable.
+**Admin seed:** On startup, creates admin from `ADMIN_EMAIL` + `ADMIN_PASSWORD` env vars if no admin exists.
+- Default: `admin@gptcdk.xyz` / `Admin@CDK2024!`
 
-### Shared Code
+### Database (PostgreSQL)
 
-- `shared/schema.ts` — single source of truth for DB types and Zod validation schemas, used by both server and client type imports.
+Drizzle ORM with these tables:
+
+| Table | Key fields |
+|---|---|
+| `users` | id, email, password_hash, name, role (admin\|customer), balance_cents, created_at |
+| `transactions` | id, user_id, amount_cents, type (credit\|debit), description, created_by, created_at |
+| `orders` | id, user_id, order_number, product, subscription, quantity, amount_cents, keys (text[]), status, created_at |
+| `session` | (managed by connect-pg-simple) |
+
+### External API: keys.ovh
+
+- **Base URL**: `https://keys.ovh/api/v1`
+- **Auth**: Bearer token via `CDK_API_KEY` environment variable
+- **Plan → slug mapping**:
+  - `plus-1m` → subscription_type_slug: `plus-1m`
+  - `plus-1y` → subscription_type_slug: `plus-12m`
+  - `go-1y` → subscription_type_slug: `go-12m`
+  - `pro-1m` → subscription_type_slug: `pro-1m`
+  - All use `product_slug: "chatgpt"`
+
+### Payment Flow
+
+1. Customer tops up via **Binance Pay** (ID: `552780449`, Username: `User-1d9f7`)
+2. Customer sends WhatsApp screenshot to `+447577308067`
+3. Admin verifies → opens `/admin` → adds balance via "Add" button
+4. Customer returns to Shop → balance shows → buys keys instantly
+
+### Environment Variables
+
+| Variable | Purpose |
+|---|---|
+| `CDK_API_KEY` | keys.ovh Bearer token |
+| `DATABASE_URL` | PostgreSQL connection string |
+| `SESSION_SECRET` | Express session secret |
+| `ADMIN_EMAIL` | Admin account email (default: admin@gptcdk.xyz) |
+| `ADMIN_PASSWORD` | Admin account password |
 
 ### Build & Dev
 
-- **Dev**: `tsx server/index.ts` starts Express which also hosts Vite dev server as middleware (HMR via WebSocket at `/vite-hmr`)
-- **Production build**: `script/build.ts` runs Vite for the client, then esbuild bundles the server into `dist/index.cjs`
-- **Replit plugins**: `@replit/vite-plugin-runtime-error-modal`, `@replit/vite-plugin-cartographer`, `@replit/vite-plugin-dev-banner` enabled in dev on Replit
+- **Dev**: `npm run dev` → `tsx server/index.ts` (Express + Vite middleware)
+- **Production**: Vite builds client to `dist/public`, esbuild bundles server
 
 ### Path Aliases
 
@@ -65,39 +122,3 @@ Preferred communication style: Simple, everyday language.
 | `@/*` | `client/src/*` |
 | `@shared/*` | `shared/*` |
 | `@assets/*` | `attached_assets/*` |
-
----
-
-## External Dependencies
-
-### External API: keys.ovh
-
-- **Base URL**: `https://keys.ovh/api/v1`
-- **Auth**: Bearer token via `CDK_API_KEY` environment variable
-- **Endpoints used**:
-  - `GET /products` — list available products
-  - `GET /key/:key/status` — check a key's status (available/used/expired/not_found)
-  - (implied) key activation endpoint for the redeem flow
-
-### Environment Variables Required
-
-| Variable | Purpose |
-|---|---|
-| `CDK_API_KEY` | Bearer token for keys.ovh API |
-| `DATABASE_URL` | PostgreSQL connection string (required by drizzle-kit, not yet used at runtime) |
-
-### NPM / Key Libraries
-
-| Library | Purpose |
-|---|---|
-| `express` v5 | HTTP server |
-| `drizzle-orm` + `drizzle-zod` | ORM and schema validation |
-| `@tanstack/react-query` | Client-side data fetching and caching |
-| `wouter` | Lightweight React router |
-| `radix-ui/*` | Accessible UI primitives |
-| `tailwindcss` | Utility-first CSS |
-| `class-variance-authority` + `clsx` + `tailwind-merge` | Conditional className utilities |
-| `lucide-react` | Icon set |
-| `zod` | Runtime schema validation |
-| `nanoid` | Unique ID generation |
-| `connect-pg-simple` | PostgreSQL session store (available but not wired up yet) |

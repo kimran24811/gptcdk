@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useMutation } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -10,14 +11,12 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
-import { Zap, Shield, Clock, ShoppingCart, CheckCircle, Minus, Plus, Copy, Check } from "lucide-react";
-import { SiWhatsapp } from "react-icons/si";
+import { Zap, Shield, Clock, ShoppingCart, CheckCircle, Minus, Plus, Copy, Check, Loader2, LogIn } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { PageLayout } from "@/components/page-layout";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useAuth } from "@/hooks/use-auth";
 
-// ─────────────────────────────────────────────
-// PRICING CONFIG — Edit prices here
-// ─────────────────────────────────────────────
 const PLANS = [
   {
     id: "plus-1m",
@@ -62,12 +61,6 @@ const PLANS = [
   },
 ];
 
-// ─────────────────────────────────────────────
-// PAYMENT CONFIG — Edit payment details here
-// ─────────────────────────────────────────────
-const BINANCE_PAY_ID = "552780449";
-const BINANCE_USERNAME = "User-1d9f7";
-
 function useCopied(ms = 2000) {
   const [copied, setCopied] = useState(false);
   const copy = (text: string) => {
@@ -97,117 +90,74 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
   );
 }
 
-function OrderDialog({
-  open,
-  onClose,
-  plan,
-  quantity,
-  unitPrice,
-  totalPrice,
-}: {
-  open: boolean;
-  onClose: () => void;
-  plan: (typeof PLANS)[0];
+interface PurchaseResult {
+  keys: string[];
+  orderNumber: string;
+  product: string;
+  subscription: string;
   quantity: number;
-  unitPrice: number;
-  totalPrice: string;
-}) {
-  const whatsappUrl = `https://wa.me/+447577308067?text=${encodeURIComponent(
-    `Hi, I sent $${totalPrice} USDT to Binance Pay ID ${BINANCE_PAY_ID} for ${plan.name} (${plan.duration}) x${quantity}. Here is my payment screenshot:`
-  )}`;
+  amount: string;
+  balanceCents: number;
+}
 
+function KeysDeliveryDialog({
+  result,
+  onClose,
+}: {
+  result: PurchaseResult | null;
+  onClose: () => void;
+}) {
   return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="sm:max-w-md mx-4 sm:mx-auto">
+    <Dialog open={!!result} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="sm:max-w-md max-h-[85vh] flex flex-col">
         <DialogHeader>
-          <DialogTitle className="text-lg">Complete Your Payment</DialogTitle>
-          <DialogDescription className="text-sm text-muted-foreground">
-            Send the exact amount to the Binance Pay ID below, then share your screenshot on Telegram.
-          </DialogDescription>
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
+              <CheckCircle className="w-4 h-4 text-primary" />
+            </div>
+            <div>
+              <DialogTitle className="text-base">Purchase Successful!</DialogTitle>
+              {result && (
+                <DialogDescription className="text-xs">
+                  Order #{result.orderNumber} · {result.quantity} key{result.quantity !== 1 ? "s" : ""} · ${result.amount}
+                </DialogDescription>
+              )}
+            </div>
+          </div>
         </DialogHeader>
 
-        {/* Order summary */}
-        <div className="rounded-lg bg-muted/40 border border-border p-4 text-sm space-y-1.5">
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Plan</span>
-            <span className="font-medium text-foreground">{plan.name}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Duration</span>
-            <span className="font-medium text-foreground">{plan.duration}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Quantity</span>
-            <span className="font-medium text-foreground">{quantity} key{quantity !== 1 ? "s" : ""}</span>
-          </div>
-          {quantity > 1 && (
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Unit price</span>
-              <span className="font-medium text-foreground">${unitPrice.toFixed(2)}</span>
+        <div className="overflow-y-auto flex-1 space-y-2 pr-0.5">
+          {result?.keys.map((key, idx) => (
+            <div
+              key={idx}
+              className="flex items-center gap-2 p-3 rounded-lg bg-muted/40 border border-border"
+              data-testid={`delivery-key-${idx}`}
+            >
+              <code className="text-xs font-mono text-foreground flex-1 break-all">{key}</code>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <CopyButton text={key} label="key" />
+                <a
+                  href={`/?key=${encodeURIComponent(key)}`}
+                  className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-primary/40 bg-primary/5 text-primary text-xs font-medium hover:bg-primary/10 transition-colors"
+                  data-testid={`button-redeem-delivery-${idx}`}
+                >
+                  <Zap className="w-3 h-3" />
+                  Redeem
+                </a>
+              </div>
             </div>
+          ))}
+        </div>
+
+        <div className="pt-2 border-t border-border">
+          {result && (
+            <p className="text-xs text-muted-foreground mb-2.5">
+              New balance: <span className="font-semibold text-foreground">${(result.balanceCents / 100).toFixed(2)}</span>
+            </p>
           )}
-          <div className="border-t border-border pt-2 mt-2 flex justify-between">
-            <span className="font-semibold text-foreground">Total</span>
-            <span className="font-bold text-foreground text-base">${totalPrice} USDT</span>
-          </div>
-        </div>
-
-        {/* Amount to send */}
-        <div className="space-y-3">
-          <p className="text-sm font-medium text-foreground">Send exactly this amount:</p>
-          <div className="flex items-center gap-3 p-4 rounded-xl border-2 border-primary bg-primary/5">
-            <span className="text-3xl font-black text-foreground flex-1" data-testid="payment-amount">
-              ${totalPrice}
-            </span>
-            <div className="flex flex-col items-end gap-1">
-              <span className="text-xs font-semibold text-muted-foreground">USDT</span>
-              <CopyButton text={totalPrice} label="amount" />
-            </div>
-          </div>
-        </div>
-
-        {/* Binance Pay details */}
-        <div className="space-y-2">
-          <p className="text-sm font-medium text-foreground">To this Binance Pay account:</p>
-          <div className="rounded-lg border border-border divide-y divide-border">
-            <div className="flex items-center justify-between px-4 py-3 gap-3">
-              <div className="min-w-0">
-                <div className="text-xs text-muted-foreground mb-0.5">Pay ID</div>
-                <div className="font-mono font-semibold text-foreground text-base" data-testid="binance-pay-id">
-                  {BINANCE_PAY_ID}
-                </div>
-              </div>
-              <CopyButton text={BINANCE_PAY_ID} label="Binance Pay ID" />
-            </div>
-            <div className="flex items-center justify-between px-4 py-3 gap-3">
-              <div className="min-w-0">
-                <div className="text-xs text-muted-foreground mb-0.5">Username</div>
-                <div className="font-mono font-semibold text-foreground" data-testid="binance-username">
-                  {BINANCE_USERNAME}
-                </div>
-              </div>
-              <CopyButton text={BINANCE_USERNAME} label="username" />
-            </div>
-          </div>
-        </div>
-
-        {/* Contact CTA */}
-        <div className="space-y-2">
-          <p className="text-sm text-muted-foreground">
-            After sending, share your payment screenshot with us on WhatsApp.
-          </p>
-          <a
-            href={whatsappUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="block"
-            data-testid="button-open-whatsapp"
-          >
-            <Button className="w-full gap-2 bg-[#25D366] hover:bg-[#1ebe5d] text-white border-0" size="lg">
-              <SiWhatsapp className="w-4 h-4" />
-              Share Screenshot on WhatsApp
-            </Button>
-          </a>
+          <Button className="w-full" onClick={onClose} data-testid="button-close-delivery">
+            Done
+          </Button>
         </div>
       </DialogContent>
     </Dialog>
@@ -216,10 +166,11 @@ function OrderDialog({
 
 export default function ShopPage() {
   const { toast } = useToast();
+  const { user, isLoading: authLoading } = useAuth();
   const [selectedPlan, setSelectedPlan] = useState(PLANS[0]);
   const [quantity, setQuantity] = useState(1);
   const [qtyInput, setQtyInput] = useState("1");
-  const [orderOpen, setOrderOpen] = useState(false);
+  const [deliveryResult, setDeliveryResult] = useState<PurchaseResult | null>(null);
 
   const unitPrice = (() => {
     const discounts = selectedPlan.discounts;
@@ -229,6 +180,9 @@ export default function ShopPage() {
   })();
 
   const totalPrice = (unitPrice * quantity).toFixed(2);
+  const totalCents = Math.round(unitPrice * quantity * 100);
+  const balanceSufficient = user ? user.balanceCents >= totalCents : false;
+  const shortfall = user ? Math.max(0, totalCents - user.balanceCents) / 100 : 0;
 
   const handleQtyInput = (val: string) => {
     setQtyInput(val);
@@ -242,22 +196,38 @@ export default function ShopPage() {
     setQtyInput(String(next));
   };
 
-  const handleOrder = () => {
-    if (quantity < 1) {
-      toast({ title: "Invalid quantity", description: "Please enter at least 1.", variant: "destructive" });
-      return;
-    }
-    setOrderOpen(true);
-  };
+  const purchase = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/purchase", {
+        planId: selectedPlan.id,
+        quantity,
+      });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      if (data.success) {
+        queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/me/orders"] });
+        setDeliveryResult(data);
+      } else {
+        toast({ title: "Purchase failed", description: data.message, variant: "destructive" });
+      }
+    },
+    onError: () => {
+      toast({ title: "Purchase failed", description: "Could not connect. Please try again.", variant: "destructive" });
+    },
+  });
 
   const planDiscounts = selectedPlan.discounts || [];
   const appliedDiscount = planDiscounts.slice().reverse().find((d) => quantity >= d.qty) ?? null;
 
   return (
     <PageLayout maxWidth="max-w-5xl">
+      <KeysDeliveryDialog result={deliveryResult} onClose={() => setDeliveryResult(null)} />
+
       <div className="mb-6 sm:mb-8">
         <h1 className="text-2xl sm:text-3xl font-bold text-foreground mb-1">Shop</h1>
-        <p className="text-muted-foreground text-sm">Buy CDK keys — pay via Binance Pay</p>
+        <p className="text-muted-foreground text-sm">Buy CDK keys — instant delivery to your account</p>
       </div>
 
       <div className="flex flex-col lg:flex-row gap-5 sm:gap-6 items-start">
@@ -379,8 +349,8 @@ export default function ShopPage() {
           {/* Feature Badges */}
           <div className="flex gap-2 sm:gap-3 flex-wrap">
             {[
-              { icon: Zap, label: "Lightning Fast", color: "text-yellow-500" },
-              { icon: Shield, label: "Private & Secure", color: "text-primary" },
+              { icon: Zap, label: "Instant Delivery", color: "text-yellow-500" },
+              { icon: Shield, label: "Secure Payment", color: "text-primary" },
               { icon: Clock, label: "No Expiration", color: "text-purple-500" },
             ].map(({ icon: Icon, label, color }) => (
               <div
@@ -422,7 +392,7 @@ export default function ShopPage() {
 
               <div className="border-t border-border" />
 
-              {/* Quantity — type any number or use buttons */}
+              {/* Quantity */}
               <div>
                 <div className="text-sm font-medium text-foreground mb-3">Quantity</div>
                 <div className="flex items-center gap-2">
@@ -460,7 +430,6 @@ export default function ShopPage() {
                   </Button>
                 </div>
 
-                {/* Unit price + discount badge */}
                 <div className="mt-2.5 flex items-center justify-between text-xs">
                   <span className="text-muted-foreground">
                     {quantity} × ${unitPrice.toFixed(2)} / unit
@@ -475,39 +444,72 @@ export default function ShopPage() {
 
               <div className="border-t border-border" />
 
-              {/* Total + Order button */}
+              {/* Total + Action */}
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium text-foreground">Total</span>
-                  <span className="text-2xl font-black text-foreground">${totalPrice} <span className="text-sm font-normal text-muted-foreground">USDT</span></span>
+                  <span className="text-2xl font-black text-foreground">
+                    ${totalPrice} <span className="text-sm font-normal text-muted-foreground">USDT</span>
+                  </span>
                 </div>
-                <Button
-                  className="w-full gap-2"
-                  size="lg"
-                  onClick={handleOrder}
-                  data-testid="button-create-order"
-                >
-                  <ShoppingCart className="w-4 h-4" />
-                  Order — ${totalPrice} USDT
-                </Button>
-                <p className="text-xs text-muted-foreground text-center">
-                  Pay via Binance Pay · Fulfilled via WhatsApp
-                </p>
+
+                {!authLoading && !user ? (
+                  /* Not logged in */
+                  <div className="space-y-2">
+                    <a href="/login" className="block" data-testid="button-login-to-purchase">
+                      <Button className="w-full gap-2" size="lg">
+                        <LogIn className="w-4 h-4" />
+                        Login to Purchase
+                      </Button>
+                    </a>
+                    <p className="text-xs text-muted-foreground text-center">
+                      Create a free account to buy instantly
+                    </p>
+                  </div>
+                ) : (
+                  /* Logged in */
+                  <div className="space-y-2">
+                    {/* Balance display */}
+                    <div className={`flex items-center justify-between text-xs rounded-lg px-3 py-2 ${
+                      balanceSufficient ? "bg-primary/5 border border-primary/20" : "bg-destructive/5 border border-destructive/20"
+                    }`}>
+                      <span className="text-muted-foreground">Your balance</span>
+                      <span className={`font-semibold ${balanceSufficient ? "text-primary" : "text-destructive"}`} data-testid="text-shop-balance">
+                        ${user ? (user.balanceCents / 100).toFixed(2) : "0.00"}
+                      </span>
+                    </div>
+
+                    {!balanceSufficient && user && (
+                      <p className="text-xs text-destructive text-center">
+                        Need ${shortfall.toFixed(2)} more —{" "}
+                        <a href="/account" className="underline font-medium">top up</a>
+                      </p>
+                    )}
+
+                    <Button
+                      className="w-full gap-2"
+                      size="lg"
+                      onClick={() => purchase.mutate()}
+                      disabled={!balanceSufficient || purchase.isPending || authLoading}
+                      data-testid="button-buy-now"
+                    >
+                      {purchase.isPending ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <ShoppingCart className="w-4 h-4" />
+                      )}
+                      {purchase.isPending ? "Processing..." : `Buy Now — $${totalPrice}`}
+                    </Button>
+                    <p className="text-xs text-muted-foreground text-center">
+                      Keys delivered instantly on screen
+                    </p>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
         </div>
       </div>
-
-      {/* Order dialog */}
-      <OrderDialog
-        open={orderOpen}
-        onClose={() => setOrderOpen(false)}
-        plan={selectedPlan}
-        quantity={quantity}
-        unitPrice={unitPrice}
-        totalPrice={totalPrice}
-      />
     </PageLayout>
   );
 }

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -66,6 +66,20 @@ export default function RedeemPage() {
   const [sessionValidated, setSessionValidated] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [activationResult, setActivationResult] = useState<ActivationResult | null>(null);
+
+  // Read ?key= from URL and auto-validate on mount
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const keyParam = params.get("key");
+    if (keyParam && keyParam.trim()) {
+      setCdkKey(keyParam.trim());
+      // Auto-trigger validation after setting the key
+      setTimeout(() => {
+        validateCdk.mutate(keyParam.trim());
+      }, 300);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const validateCdk = useMutation({
     mutationFn: async (key: string) => {
@@ -150,6 +164,10 @@ export default function RedeemPage() {
     setSessionValidated(false);
     setSessionError(null);
     setActivationResult(null);
+    // Clear key from URL without reload
+    const url = new URL(window.location.href);
+    url.searchParams.delete("key");
+    window.history.replaceState({}, "", url.toString());
   };
 
   return (

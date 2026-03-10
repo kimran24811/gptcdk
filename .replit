@@ -47,3 +47,5 @@ waitForPort = 5000
 
 [userenv.shared]
 CDK_API_KEY = "sk_live_282a209ac5f0869745fe95942efd5c574fe579301e6a7dd0"
+ADMIN_EMAIL = "admin@gptcdk.xyz"
+ADMIN_PASSWORD = "Admin@CDK2024!"
