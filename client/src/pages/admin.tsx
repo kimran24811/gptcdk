@@ -10,7 +10,39 @@ import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Users, Package, DollarSign, Plus } from "lucide-react";
+import { Loader2, Users, Package, DollarSign, Plus, Copy, Check, Settings } from "lucide-react";
+
+const BINANCE_PAY_ID = "552780449";
+const BINANCE_USERNAME = "User-1d9f7";
+const WHATSAPP = "+447577308067";
+
+function useCopied(ms = 2000) {
+  const [copied, setCopied] = useState(false);
+  const copy = (text: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), ms);
+    });
+  };
+  return { copied, copy };
+}
+
+function CopyBtn({ text }: { text: string }) {
+  const { copied, copy } = useCopied();
+  return (
+    <button
+      onClick={() => copy(text)}
+      className={`flex items-center gap-1 px-2 py-1 rounded border text-xs transition-all shrink-0 ${
+        copied
+          ? "border-primary bg-primary/10 text-primary"
+          : "border-border bg-background text-muted-foreground hover:text-foreground"
+      }`}
+    >
+      {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+      {copied ? "Copied" : "Copy"}
+    </button>
+  );
+}
 
 interface Customer {
   id: number;
@@ -80,8 +112,37 @@ function CreditDialog({
           <div className="text-sm text-muted-foreground">
             Adding balance to: <span className="font-medium text-foreground">{customer?.email}</span>
           </div>
+
+          {/* Binance Pay reference */}
+          <div className="rounded-lg border border-border bg-muted/20 divide-y divide-border">
+            <div className="px-3 py-2">
+              <p className="text-xs font-semibold text-muted-foreground mb-1.5">Your Binance Pay (receive USDT here)</p>
+            </div>
+            <div className="flex items-center justify-between px-3 py-2 gap-2">
+              <div>
+                <div className="text-xs text-muted-foreground">Pay ID</div>
+                <div className="font-mono font-bold text-foreground text-sm">{BINANCE_PAY_ID}</div>
+              </div>
+              <CopyBtn text={BINANCE_PAY_ID} />
+            </div>
+            <div className="flex items-center justify-between px-3 py-2 gap-2">
+              <div>
+                <div className="text-xs text-muted-foreground">Username</div>
+                <div className="font-mono font-semibold text-foreground text-sm">{BINANCE_USERNAME}</div>
+              </div>
+              <CopyBtn text={BINANCE_USERNAME} />
+            </div>
+            <div className="flex items-center justify-between px-3 py-2 gap-2">
+              <div>
+                <div className="text-xs text-muted-foreground">WhatsApp</div>
+                <div className="font-mono font-semibold text-foreground text-sm">{WHATSAPP}</div>
+              </div>
+              <CopyBtn text={WHATSAPP} />
+            </div>
+          </div>
+
           <div>
-            <label className="text-sm font-medium text-foreground block mb-1.5">Amount (USD)</label>
+            <label className="text-sm font-medium text-foreground block mb-1.5">Amount to credit (USD)</label>
             <div className="relative">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">$</span>
               <Input
@@ -125,10 +186,134 @@ function CreditDialog({
   );
 }
 
+function SettingsTab({ user }: { user: { id: number; name: string; email: string } }) {
+  const { toast } = useToast();
+  const [name, setName] = useState(user.name);
+  const [email, setEmail] = useState(user.email);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+
+  const update = useMutation({
+    mutationFn: async (payload: object) => {
+      const res = await apiRequest("PATCH", "/api/auth/profile", payload);
+      return res.json();
+    },
+    onSuccess: (data) => {
+      if (data.success) {
+        toast({ title: "Settings saved", description: "Your account has been updated." });
+        queryClient.setQueryData(["/api/auth/me"], { user: data.user });
+        setCurrentPassword("");
+        setNewPassword("");
+        setConfirmPassword("");
+      } else {
+        toast({ title: "Update failed", description: data.message, variant: "destructive" });
+      }
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Could not update settings.", variant: "destructive" });
+    },
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newPassword && newPassword !== confirmPassword) {
+      toast({ title: "Passwords don't match", description: "New password and confirmation must match.", variant: "destructive" });
+      return;
+    }
+    const payload: Record<string, string> = { name, email };
+    if (newPassword) {
+      payload.currentPassword = currentPassword;
+      payload.newPassword = newPassword;
+    }
+    update.mutate(payload);
+  };
+
+  return (
+    <div className="max-w-md">
+      <form onSubmit={handleSubmit} className="space-y-5">
+        <Card className="border border-card-border">
+          <CardContent className="p-5 space-y-4">
+            <h3 className="text-sm font-semibold text-foreground">Account Details</h3>
+            <div>
+              <label className="text-sm font-medium text-foreground block mb-1.5">Name</label>
+              <Input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Your name"
+                data-testid="input-settings-name"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-foreground block mb-1.5">Email</label>
+              <Input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="admin@example.com"
+                data-testid="input-settings-email"
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border border-card-border">
+          <CardContent className="p-5 space-y-4">
+            <h3 className="text-sm font-semibold text-foreground">Change Password</h3>
+            <p className="text-xs text-muted-foreground">Leave blank if you don't want to change your password.</p>
+            <div>
+              <label className="text-sm font-medium text-foreground block mb-1.5">Current password</label>
+              <Input
+                type="password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                placeholder="••••••••"
+                data-testid="input-settings-current-password"
+                autoComplete="current-password"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-foreground block mb-1.5">New password</label>
+              <Input
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="At least 6 characters"
+                data-testid="input-settings-new-password"
+                autoComplete="new-password"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-foreground block mb-1.5">Confirm new password</label>
+              <Input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="Repeat new password"
+                data-testid="input-settings-confirm-password"
+                autoComplete="new-password"
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Button
+          type="submit"
+          disabled={!name.trim() || !email.trim() || update.isPending}
+          data-testid="button-save-settings"
+        >
+          {update.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+          {update.isPending ? "Saving..." : "Save Changes"}
+        </Button>
+      </form>
+    </div>
+  );
+}
+
 export default function AdminPage() {
   const [, navigate] = useLocation();
   const { user, isAdmin, isLoading } = useAuth();
-  const [tab, setTab] = useState<"customers" | "orders">("customers");
+  const [tab, setTab] = useState<"customers" | "orders" | "settings">("customers");
   const [creditTarget, setCreditTarget] = useState<Customer | null>(null);
 
   const { data: customersData, isLoading: customersLoading } = useQuery<{ success: boolean; data: Customer[] }>({
@@ -158,8 +343,7 @@ export default function AdminPage() {
 
   const customers = customersData?.data ?? [];
   const orders = ordersData?.data ?? [];
-  const totalBalance = customers.reduce((sum, c) => sum + c.balanceCents, 0);
-  const totalRevenue = orders.reduce((sum, o) => sum + o.amountCents, 0);
+  const totalBalance = customers.filter(c => c.role !== "admin").reduce((sum, c) => sum + c.balanceCents, 0);
 
   return (
     <PageLayout maxWidth="max-w-5xl">
@@ -167,7 +351,7 @@ export default function AdminPage() {
 
       <div className="mb-6 sm:mb-8">
         <h1 className="text-2xl sm:text-3xl font-bold text-foreground mb-1">Admin Panel</h1>
-        <p className="text-muted-foreground text-sm">Manage customers and view orders</p>
+        <p className="text-muted-foreground text-sm">Manage customers, orders and settings</p>
       </div>
 
       {/* Stats */}
@@ -178,7 +362,9 @@ export default function AdminPage() {
               <Users className="w-4 h-4 text-primary" />
               <span className="text-xs text-muted-foreground font-medium">Customers</span>
             </div>
-            <div className="text-2xl font-bold text-foreground" data-testid="stat-customers">{customers.length}</div>
+            <div className="text-2xl font-bold text-foreground" data-testid="stat-customers">
+              {customers.filter(c => c.role !== "admin").length}
+            </div>
           </CardContent>
         </Card>
         <Card className="border border-card-border">
@@ -203,16 +389,17 @@ export default function AdminPage() {
 
       {/* Tabs */}
       <div className="flex gap-1 mb-5 border-b border-border">
-        {(["customers", "orders"] as const).map((t) => (
+        {(["customers", "orders", "settings"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
-            className={`px-4 py-2.5 text-sm font-medium capitalize border-b-2 transition-colors -mb-px ${
+            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium capitalize border-b-2 transition-colors -mb-px ${
               tab === t ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"
             }`}
             data-testid={`tab-${t}`}
           >
-            {t}
+            {t === "settings" && <Settings className="w-3.5 h-3.5" />}
+            {t === "settings" ? "Settings" : t.charAt(0).toUpperCase() + t.slice(1)}
           </button>
         ))}
       </div>
@@ -224,7 +411,7 @@ export default function AdminPage() {
             <div className="flex items-center justify-center py-12">
               <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
             </div>
-          ) : customers.length === 0 ? (
+          ) : customers.filter(c => c.role !== "admin").length === 0 ? (
             <Card className="border border-card-border">
               <CardContent className="p-8 text-center">
                 <Users className="w-10 h-10 text-muted-foreground/40 mx-auto mb-3" />
@@ -233,14 +420,13 @@ export default function AdminPage() {
             </Card>
           ) : (
             <div className="space-y-2">
-              {customers.map((c) => (
+              {customers.filter(c => c.role !== "admin").map((c) => (
                 <Card key={c.id} className="border border-card-border" data-testid={`row-customer-${c.id}`}>
                   <CardContent className="p-4">
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="font-semibold text-foreground text-sm truncate">{c.name}</span>
-                          {c.role === "admin" && <Badge variant="default" className="text-xs">Admin</Badge>}
                         </div>
                         <div className="text-xs text-muted-foreground truncate">{c.email}</div>
                         <div className="text-xs text-muted-foreground mt-0.5">
@@ -254,18 +440,16 @@ export default function AdminPage() {
                           </div>
                           <div className="text-xs text-muted-foreground">balance</div>
                         </div>
-                        {c.role !== "admin" && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => setCreditTarget(c)}
-                            className="gap-1.5"
-                            data-testid={`button-add-balance-${c.id}`}
-                          >
-                            <Plus className="w-3.5 h-3.5" />
-                            Add
-                          </Button>
-                        )}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setCreditTarget(c)}
+                          className="gap-1.5"
+                          data-testid={`button-add-balance-${c.id}`}
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          Add
+                        </Button>
                       </div>
                     </div>
                   </CardContent>
@@ -319,6 +503,9 @@ export default function AdminPage() {
           )}
         </div>
       )}
+
+      {/* Settings tab */}
+      {tab === "settings" && <SettingsTab user={user} />}
     </PageLayout>
   );
 }

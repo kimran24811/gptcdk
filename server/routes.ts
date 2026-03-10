@@ -372,6 +372,57 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // ── Profile update ───────────────────────────────────
+
+  app.patch("/api/auth/profile", requireAuth, async (req, res) => {
+    const { name, email, currentPassword, newPassword } = req.body;
+    try {
+      const [user] = await db.select().from(users).where(eq(users.id, req.session.userId!));
+      if (!user) {
+        return res.status(404).json({ success: false, message: "User not found." });
+      }
+
+      const updates: Partial<typeof users.$inferInsert> = {};
+
+      if (name && name.trim()) updates.name = name.trim();
+
+      if (email && email.trim() && email.toLowerCase() !== user.email) {
+        const [existing] = await db.select().from(users).where(eq(users.email, email.toLowerCase()));
+        if (existing) {
+          return res.status(400).json({ success: false, message: "That email is already in use." });
+        }
+        updates.email = email.toLowerCase().trim();
+      }
+
+      if (newPassword) {
+        if (!currentPassword) {
+          return res.status(400).json({ success: false, message: "Current password is required to set a new password." });
+        }
+        const match = await bcrypt.compare(currentPassword, user.passwordHash);
+        if (!match) {
+          return res.status(400).json({ success: false, message: "Current password is incorrect." });
+        }
+        if (newPassword.length < 6) {
+          return res.status(400).json({ success: false, message: "New password must be at least 6 characters." });
+        }
+        updates.passwordHash = await bcrypt.hash(newPassword, 10);
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return res.json({ success: true, message: "No changes made." });
+      }
+
+      const [updated] = await db.update(users).set(updates).where(eq(users.id, user.id)).returning();
+      return res.json({
+        success: true,
+        user: { id: updated.id, email: updated.email, name: updated.name, role: updated.role, balanceCents: updated.balanceCents },
+      });
+    } catch (err) {
+      console.error("Profile update error:", err);
+      return res.status(500).json({ success: false, message: "Could not update profile." });
+    }
+  });
+
   // ── Existing CDK routes ──────────────────────────────
 
   app.get("/api/products", async (_req, res) => {

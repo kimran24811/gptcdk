@@ -10,6 +10,10 @@ import { SiWhatsapp } from "react-icons/si";
 import { Wallet, Package, Copy, Check, ChevronDown, ChevronUp, Zap, Loader2 } from "lucide-react";
 import type { Order } from "@shared/schema";
 
+const BINANCE_PAY_ID = "552780449";
+const BINANCE_USERNAME = "User-1d9f7";
+const WHATSAPP = "+447577308067";
+
 function useCopied(ms = 2000) {
   const [copied, setCopied] = useState(false);
   const copy = (text: string) => {
@@ -21,17 +25,17 @@ function useCopied(ms = 2000) {
   return { copied, copy };
 }
 
-function CopyBtn({ text }: { text: string }) {
+function CopyBtn({ text, label }: { text: string; label?: string }) {
   const { copied, copy } = useCopied();
   return (
     <button
       onClick={() => copy(text)}
-      className={`flex items-center gap-1 px-2 py-1 rounded border text-xs transition-all ${
+      className={`flex items-center gap-1 px-2 py-1 rounded border text-xs transition-all shrink-0 ${
         copied
           ? "border-primary bg-primary/10 text-primary"
           : "border-border bg-background text-muted-foreground hover:text-foreground"
       }`}
-      data-testid={`button-copy-key-${text.slice(0, 8)}`}
+      data-testid={`button-copy-${label || text.slice(0, 8)}`}
     >
       {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
       {copied ? "Copied" : "Copy"}
@@ -82,7 +86,7 @@ function OrderRow({ order }: { order: Order }) {
               >
                 <code className="text-xs font-mono text-foreground flex-1 truncate">{key}</code>
                 <div className="flex items-center gap-1.5 shrink-0">
-                  <CopyBtn text={key} />
+                  <CopyBtn text={key} label={`key-${order.id}-${idx}`} />
                   <a
                     href={`/?key=${encodeURIComponent(key)}`}
                     className="flex items-center gap-1 px-2 py-1 rounded border border-primary/40 bg-primary/5 text-primary text-xs font-medium hover:bg-primary/10 transition-colors"
@@ -128,8 +132,8 @@ export default function AccountPage() {
   }
 
   const orders = ordersData?.data ?? [];
-  const whatsappUrl = `https://wa.me/+447577308067?text=${encodeURIComponent(
-    `Hi, I'd like to top up my account (${user.email}). I'll send payment and share the screenshot.`
+  const whatsappUrl = `https://wa.me/${WHATSAPP}?text=${encodeURIComponent(
+    `Hi, I'd like to top up my ChatGPT Recharge account.\n\nEmail: ${user.email}\n\nI have sent USDT to Binance Pay ID: ${BINANCE_PAY_ID}. Here is my payment screenshot:`
   )}`;
 
   return (
@@ -160,14 +164,39 @@ export default function AccountPage() {
               </div>
             </div>
 
-            <div className="mt-5 pt-4 border-t border-border">
-              <p className="text-xs text-muted-foreground mb-3">
-                To top up, send USDT via Binance Pay and share your screenshot on WhatsApp. Your balance will be updated within minutes.
+            {/* Top-up instructions */}
+            <div className="mt-5 pt-4 border-t border-border space-y-3">
+              <p className="text-sm font-semibold text-foreground">How to top up:</p>
+              <p className="text-xs text-muted-foreground">
+                Send USDT to the Binance Pay account below, then share your payment screenshot on WhatsApp. Your balance is updated within minutes.
               </p>
+
+              {/* Binance Pay details */}
+              <div className="rounded-lg border border-border divide-y divide-border">
+                <div className="flex items-center justify-between px-3 py-2.5 gap-3">
+                  <div className="min-w-0">
+                    <div className="text-xs text-muted-foreground mb-0.5">Binance Pay ID</div>
+                    <div className="font-mono font-bold text-foreground text-base" data-testid="text-binance-pay-id">
+                      {BINANCE_PAY_ID}
+                    </div>
+                  </div>
+                  <CopyBtn text={BINANCE_PAY_ID} label="binance-id" />
+                </div>
+                <div className="flex items-center justify-between px-3 py-2.5 gap-3">
+                  <div className="min-w-0">
+                    <div className="text-xs text-muted-foreground mb-0.5">Username</div>
+                    <div className="font-mono font-semibold text-foreground" data-testid="text-binance-username">
+                      {BINANCE_USERNAME}
+                    </div>
+                  </div>
+                  <CopyBtn text={BINANCE_USERNAME} label="binance-username" />
+                </div>
+              </div>
+
               <a href={whatsappUrl} target="_blank" rel="noopener noreferrer" data-testid="button-topup-whatsapp">
-                <Button size="sm" className="gap-2 bg-[#25D366] hover:bg-[#1ebe5d] text-white border-0">
-                  <SiWhatsapp className="w-3.5 h-3.5" />
-                  Top Up via WhatsApp
+                <Button className="w-full gap-2 bg-[#25D366] hover:bg-[#1ebe5d] text-white border-0">
+                  <SiWhatsapp className="w-4 h-4" />
+                  Share Payment Screenshot on WhatsApp
                 </Button>
               </a>
             </div>
