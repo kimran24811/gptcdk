@@ -3,7 +3,6 @@ import { createServer, type Server } from "http";
 
 const CDK_API_KEY = process.env.CDK_API_KEY || "";
 const API_BASE = "https://keys.ovh/api/v1";
-const WEB_BASE = "https://keys.ovh";
 
 async function apiCall(method: string, path: string, body?: object) {
   const res = await fetch(`${API_BASE}${path}`, {
@@ -17,103 +16,13 @@ async function apiCall(method: string, path: string, body?: object) {
   return res.json();
 }
 
-async function pollActivationStatus(pollToken: string, cookieHeader: string, xsrfToken: string): Promise<any> {
-  for (let i = 0; i < 30; i++) {
-    await new Promise(r => setTimeout(r, 3000));
-    try {
-      const res = await fetch(`${WEB_BASE}/api/activation/${pollToken}/status`, {
-        headers: {
-          "Accept": "application/json",
-          "Cookie": cookieHeader,
-          "X-XSRF-TOKEN": xsrfToken,
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-          "Referer": `${WEB_BASE}/redeem`,
-        },
-      });
-      const result = await res.json();
-      console.log("[pollActivation] poll attempt", i + 1, "status:", result.status || JSON.stringify(result));
-      if (result.status === "success") {
-        return { success: true, data: { email: result.email, task_id: result.task_id } };
-      }
-      if (result.status === "failed") {
-        return { success: false, error_code: result.error_code, message: result.message };
-      }
-    } catch (e) {
-      console.error("[pollActivation] error:", e);
-    }
-  }
-  return { success: false, message: "Activation timed out. Please check your ChatGPT account — it may have been activated." };
-}
-
-async function webActivate(cdkKey: string, rawSessionJson: string): Promise<any> {
-  const csrfRes = await fetch(`${WEB_BASE}/sanctum/csrf-cookie`, {
-    method: "GET",
-    headers: {
-      "Accept": "application/json",
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      "Referer": WEB_BASE,
-    },
-    redirect: "follow",
-  });
-
-  let xsrfToken = "";
-  let setCookieHeaders: string[] = [];
-  try {
-    setCookieHeaders = (csrfRes.headers as any).getSetCookie?.() || [];
-  } catch {}
-  if (!setCookieHeaders.length) {
-    const raw = csrfRes.headers.get("set-cookie") || "";
-    if (raw) setCookieHeaders = [raw];
-  }
-  console.log("[webActivate] CSRF set-cookie count:", setCookieHeaders.length);
-
-  for (const c of setCookieHeaders) {
-    const match = c.match(/XSRF-TOKEN=([^;]+)/);
-    if (match) {
-      xsrfToken = decodeURIComponent(match[1]);
-      break;
-    }
-  }
-  console.log("[webActivate] xsrfToken length:", xsrfToken.length);
-
-  const cookieHeader = setCookieHeaders.map(c => c.split(";")[0]).join("; ");
-
-  const redeemRes = await fetch(`${WEB_BASE}/api/redeem`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Accept": "application/json",
-      "X-XSRF-TOKEN": xsrfToken,
-      "Cookie": cookieHeader,
-      "Referer": `${WEB_BASE}/redeem`,
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      "Origin": WEB_BASE,
-    },
-    body: JSON.stringify({ cdk: cdkKey.trim(), token: rawSessionJson.trim() }),
-  });
-
-  console.log("[webActivate] redeem HTTP status:", redeemRes.status);
-  const data = await redeemRes.json();
-  console.log("[webActivate] redeem response:", JSON.stringify(data));
-
-  if (data.queued && data.poll_token) {
-    console.log("[webActivate] activation queued, polling for result...");
-    const pollResult = await pollActivationStatus(data.poll_token, cookieHeader, xsrfToken);
-    return { status: 200, data: pollResult };
-  }
-
-  return { status: redeemRes.status, data };
-}
-
 function validateAccessToken(token: string): { valid: boolean; message?: string } {
-  // Must be a non-empty string
   if (!token || typeof token !== "string" || token.trim().length === 0) {
     return { valid: false, message: "No access token found in session data." };
   }
 
   const parts = token.split(".");
 
-  // A JWT must have exactly 3 parts
   if (parts.length !== 3) {
     return {
       valid: false,
@@ -121,13 +30,11 @@ function validateAccessToken(token: string): { valid: boolean; message?: string 
     };
   }
 
-  // Decode the payload (second part) — base64url encoded
   try {
     const payloadBase64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
     const padded = payloadBase64 + "=".repeat((4 - (payloadBase64.length % 4)) % 4);
     const payload = JSON.parse(Buffer.from(padded, "base64").toString("utf8"));
 
-    // Check expiry
     if (payload.exp) {
       const nowSeconds = Math.floor(Date.now() / 1000);
       if (payload.exp < nowSeconds) {
@@ -183,13 +90,8 @@ export async function registerRoutes(
 
       const keyData = data.data;
       if (keyData.status === "available") {
-        // Only show subscription name, not "ChatGPT ChatGPT Plus CDK"
         const type = keyData.subscription || "Plus CDK";
-        return res.json({
-          valid: true,
-          type,
-          status: keyData.status,
-        });
+        return res.json({ valid: true, type, status: keyData.status });
       } else if (keyData.status === "used") {
         return res.json({ valid: false, message: "This key has already been activated." });
       } else if (keyData.status === "expired") {
@@ -226,13 +128,11 @@ export async function registerRoutes(
         });
       }
 
-      // Local JWT format + expiry check first (fast path for obviously bad tokens)
       const tokenCheck = validateAccessToken(accessToken);
       if (!tokenCheck.valid) {
         return res.json({ valid: false, message: tokenCheck.message });
       }
 
-      // Actually verify the token is live by calling ChatGPT's API
       let chatGptRes: Response;
       try {
         chatGptRes = await fetch("https://chatgpt.com/backend-api/me", {
@@ -244,7 +144,6 @@ export async function registerRoutes(
           },
         });
       } catch {
-        // Network error reaching ChatGPT — can't verify, reject to be safe
         return res.json({
           valid: false,
           message: "Could not reach ChatGPT to verify your session. Please check your connection and try again.",
@@ -281,12 +180,24 @@ export async function registerRoutes(
       return res.status(400).json({ success: false, message: "CDK key and session data are required." });
     }
 
+    let accessToken: string;
     try {
-      const { status: httpStatus, data } = await webActivate(cdkKey, sessionData);
-
-      if (httpStatus === 419) {
-        return res.json({ success: false, message: "CSRF error — please try again." });
+      const parsed = JSON.parse(sessionData.trim());
+      accessToken = parsed.accessToken || parsed.access_token || parsed.token;
+      if (!accessToken) {
+        return res.status(400).json({ success: false, message: "No accessToken found in session data." });
       }
+    } catch {
+      return res.status(400).json({ success: false, message: "Invalid session data — could not parse JSON." });
+    }
+
+    try {
+      console.log("[activate] calling /api/v1/activate for key:", cdkKey.trim().slice(0, 8) + "...");
+      const data = await apiCall("POST", "/activate", {
+        key: cdkKey.trim(),
+        user_token: accessToken,
+      });
+      console.log("[activate] response success:", data.success, "error:", data.error);
 
       if (data.success) {
         return res.json({
@@ -298,23 +209,17 @@ export async function registerRoutes(
         });
       }
 
-      if (data.queued && data.poll_token) {
-        return res.json({ success: false, message: "Activation is queued — please check back in a few moments." });
-      }
-
       const errorMessages: Record<string, string> = {
         key_not_found: "Key not found or not available.",
-        key_invalid_or_used: "This key has already been used or is invalid.",
+        activation_failed: "Activation failed. Please check your session data and try again.",
         token_invalid: "Token validation failed. Please get a fresh session from the ChatGPT AuthSession page.",
         token_premium: "Your account already has an active subscription.",
-        team_subscription: "Team subscriptions are not supported.",
-        activation_failed: "Activation failed. Please check your session data and try again.",
         rate_limit_exceeded: "Too many requests. Please wait and try again.",
-        provider_error: "Activation provider error. Please try again.",
-        all_keys_invalid: "No valid keys available. Please contact support.",
+        out_of_stock: "Product is out of stock.",
+        invalid_token: "Invalid API token — please contact support.",
       };
 
-      const msg = errorMessages[data.error] || errorMessages[data.error_code] || data.message || "Activation failed.";
+      const msg = errorMessages[data.error] || data.message || "Activation failed.";
       return res.json({ success: false, message: msg });
     } catch (err) {
       console.error("Activation error:", err);
