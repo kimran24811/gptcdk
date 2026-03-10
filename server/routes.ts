@@ -510,8 +510,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.json({ success: false, message: "CDK key and session data are required." });
     }
     let accessToken: string;
+    const rawSession = sessionData.trim();
     try {
-      const parsed = JSON.parse(sessionData.trim());
+      const parsed = JSON.parse(rawSession);
       accessToken = parsed.accessToken || parsed.access_token || parsed.token;
       if (!accessToken) {
         return res.json({ success: false, message: "No accessToken found in session data." });
@@ -520,9 +521,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.json({ success: false, message: "Invalid session data — could not parse JSON." });
     }
     try {
-      console.log("[activate] calling /api/v1/activate for key:", cdkKey.trim().slice(0, 8) + "...");
-      const data = await apiCall("POST", "/activate", { key: cdkKey.trim(), user_token: accessToken });
-      console.log("[activate] response success:", data.success, "error:", data.error);
+      console.log("[activate] key:", cdkKey.trim().slice(0, 8) + "...", "token length:", accessToken.length, "token prefix:", accessToken.slice(0, 20));
+
+      // Try with full session JSON first, then fall back to just the access token
+      let data = await apiCall("POST", "/activate", { key: cdkKey.trim(), user_token: rawSession });
+      console.log("[activate] full-session attempt: success:", data.success, "error:", data.error);
+
+      if (!data.success && data.error === "token_invalid") {
+        // Fall back to just the access token
+        data = await apiCall("POST", "/activate", { key: cdkKey.trim(), user_token: accessToken });
+        console.log("[activate] token-only attempt: success:", data.success, "error:", data.error);
+      }
       if (data.success) {
         return res.json({ success: true, email: data.data?.email, product: data.data?.product, subscription: data.data?.subscription, activatedAt: data.data?.activated_at });
       }
