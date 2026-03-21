@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import bcrypt from "bcrypt";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and, sql } from "drizzle-orm";
 import { db } from "./storage";
 import { users, transactions, orders, depositRequests } from "@shared/schema";
 
@@ -390,13 +390,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     const amountCents = Math.round(amount * 100);
-    const microOffset = Math.floor(Math.random() * 99) + 1;
-    const totalUnits = Math.round(amount * 10000) + microOffset;
-    const amountUsdt = (totalUnits / 10000).toFixed(4);
     const expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000);
     const walletAddress = network === "bep20" ? USDT_BEP20_ADDRESS : USDT_TRC20_ADDRESS;
 
     try {
+      // Generate a unique amountUsdt: add a micro-offset (0.0001–0.0099) that
+      // doesn't collide with any active pending deposit for the same network.
+      let amountUsdt = "";
+      let tries = 0;
+      while (tries < 30) {
+        const microOffset = Math.floor(Math.random() * 99) + 1; // 1–99
+        const totalUnits = Math.round(amount * 10000) + microOffset;
+        const candidate = (totalUnits / 10000).toFixed(4);
+        const [collision] = await db.select({ id: depositRequests.id })
+          .from(depositRequests)
+          .where(and(
+            eq(depositRequests.amountUsdt, candidate),
+            eq(depositRequests.network, network),
+            eq(depositRequests.status, "pending"),
+          ))
+          .limit(1);
+        if (!collision) { amountUsdt = candidate; break; }
+        tries++;
+      }
+      if (!amountUsdt) {
+        return res.status(503).json({ success: false, message: "Could not generate a unique deposit amount. Please try again shortly." });
+      }
+
       const [deposit] = await db.insert(depositRequests).values({
         userId: req.session.userId!,
         amountUsdt,
@@ -471,20 +491,47 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       if (found && txHash) {
-        const [user] = await db.select().from(users).where(eq(users.id, deposit.userId));
-        if (user) {
-          const newBalance = user.balanceCents + deposit.amountCents;
-          await db.update(users).set({ balanceCents: newBalance }).where(eq(users.id, user.id));
-          await db.update(depositRequests).set({ status: "completed", txHash }).where(eq(depositRequests.id, depositId));
-          await db.insert(transactions).values({
-            userId: user.id,
-            amountCents: deposit.amountCents,
+        // Credit atomically inside a transaction; guard against txHash reuse
+        const result = await db.transaction(async (tx) => {
+          // Ensure this txHash hasn't already been used for any other deposit
+          const [txUsed] = await tx.select({ id: depositRequests.id })
+            .from(depositRequests)
+            .where(and(eq(depositRequests.txHash, txHash), eq(depositRequests.status, "completed")))
+            .limit(1);
+          if (txUsed) return null; // TX already claimed — don't double-credit
+
+          // Re-read deposit inside the transaction to confirm still pending
+          const [dep] = await tx.select().from(depositRequests)
+            .where(and(eq(depositRequests.id, depositId), eq(depositRequests.status, "pending")))
+            .limit(1);
+          if (!dep) return null; // Already processed by concurrent request
+
+          // Mark deposit completed
+          await tx.update(depositRequests)
+            .set({ status: "completed", txHash })
+            .where(eq(depositRequests.id, depositId));
+
+          // Atomically increment user balance (avoid read-then-write race)
+          const [updatedUser] = await tx.update(users)
+            .set({ balanceCents: sql`balance_cents + ${dep.amountCents}` })
+            .where(eq(users.id, dep.userId))
+            .returning({ balanceCents: users.balanceCents });
+
+          await tx.insert(transactions).values({
+            userId: dep.userId,
+            amountCents: dep.amountCents,
             type: "credit",
-            description: `USDT top-up via ${deposit.network.toUpperCase()} — ${deposit.amountUsdt} USDT`,
-            createdBy: user.id,
+            description: `USDT top-up via ${dep.network.toUpperCase()} — ${dep.amountUsdt} USDT`,
+            createdBy: dep.userId,
           });
-          return res.json({ success: true, status: "completed", balanceCents: newBalance });
+          return updatedUser?.balanceCents ?? null;
+        });
+
+        if (result !== null) {
+          return res.json({ success: true, status: "completed", balanceCents: result });
         }
+        // Concurrent request already processed — return current status
+        return res.json({ success: true, status: "completed" });
       }
 
       return res.json({ success: true, status: "pending", message: "Payment not detected yet. Please wait a few minutes and try again." });
@@ -508,23 +555,37 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/admin/deposits/:id/approve", requireAdmin, async (req, res) => {
     const depositId = parseInt(req.params.id, 10);
     try {
-      const [deposit] = await db.select().from(depositRequests).where(eq(depositRequests.id, depositId));
-      if (!deposit) return res.json({ success: false, message: "Deposit not found." });
-      if (deposit.status === "completed") return res.json({ success: false, message: "Already completed." });
+      const newBalance = await db.transaction(async (tx) => {
+        // Re-read inside transaction — confirm still pending
+        const [deposit] = await tx.select().from(depositRequests)
+          .where(and(eq(depositRequests.id, depositId), eq(depositRequests.status, "pending")))
+          .limit(1);
+        if (!deposit) return null; // Already completed or not found
 
-      const [user] = await db.select().from(users).where(eq(users.id, deposit.userId));
-      if (!user) return res.json({ success: false, message: "User not found." });
+        // Mark completed
+        await tx.update(depositRequests)
+          .set({ status: "completed", txHash: "manual-admin-approval" })
+          .where(eq(depositRequests.id, depositId));
 
-      const newBalance = user.balanceCents + deposit.amountCents;
-      await db.update(users).set({ balanceCents: newBalance }).where(eq(users.id, user.id));
-      await db.update(depositRequests).set({ status: "completed", txHash: "manual-admin-approval" }).where(eq(depositRequests.id, depositId));
-      await db.insert(transactions).values({
-        userId: user.id,
-        amountCents: deposit.amountCents,
-        type: "credit",
-        description: `Manual top-up via ${deposit.network.toUpperCase()} — ${deposit.amountUsdt} USDT (admin approved)`,
-        createdBy: req.session.userId!,
+        // Atomically increment balance
+        const [updatedUser] = await tx.update(users)
+          .set({ balanceCents: sql`balance_cents + ${deposit.amountCents}` })
+          .where(eq(users.id, deposit.userId))
+          .returning({ balanceCents: users.balanceCents });
+
+        await tx.insert(transactions).values({
+          userId: deposit.userId,
+          amountCents: deposit.amountCents,
+          type: "credit",
+          description: `Manual top-up via ${deposit.network.toUpperCase()} — ${deposit.amountUsdt} USDT (admin approved)`,
+          createdBy: req.session.userId!,
+        });
+        return updatedUser?.balanceCents ?? null;
       });
+
+      if (newBalance === null) {
+        return res.json({ success: false, message: "Deposit already completed or not found." });
+      }
       return res.json({ success: true, newBalance });
     } catch (err) {
       console.error("Admin approve deposit error:", err);
