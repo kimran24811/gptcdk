@@ -404,6 +404,8 @@ interface InventoryKey {
   key: string;
   status: string;
   soldTo: number | null;
+  soldToEmail: string | null;
+  soldToName: string | null;
   soldAt: string | null;
   createdAt: string;
 }
@@ -592,6 +594,9 @@ function KeyInventoryTab() {
                     {k.soldAt && (
                       <div className="text-xs text-muted-foreground mt-0.5">
                         Sold {new Date(k.soldAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+                        {k.soldToEmail && (
+                          <span className="ml-1">· <span className="font-medium" data-testid={`text-soldto-${k.id}`}>{k.soldToName ?? k.soldToEmail}</span></span>
+                        )}
                       </div>
                     )}
                   </div>

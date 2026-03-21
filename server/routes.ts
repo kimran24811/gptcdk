@@ -95,8 +95,69 @@ const PLAN_SLUG_MAP: Record<string, { product_slug: string; subscription_type_sl
   "pro-1m":   { product_slug: "chatgpt", subscription_type_slug: "pro-1m",   name: "ChatGPT Pro 1 Month" },
 };
 
+// ── Cached plan pricing (populated from keys.ovh, used for inventory orders) ─
+interface VolumeTier { min_qty: number; price: number; }
+interface PlanPriceInfo {
+  basePrice: number;                 // USD (default unit price)
+  volumePrices: VolumeTier[];        // sorted desc by min_qty
+  productName: string;
+  subscriptionName: string;
+  cachedAt: number;                  // ms timestamp
+}
+const planPriceCache: Record<string, PlanPriceInfo> = {};
+const PRICE_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+function resolvePlanPrice(info: PlanPriceInfo, quantity: number): number {
+  if (info.volumePrices.length) {
+    const tier = info.volumePrices.find((t) => quantity >= t.min_qty);
+    if (tier) return tier.price;
+  }
+  return info.basePrice;
+}
+
+async function fetchAndCachePricing(planId: string): Promise<PlanPriceInfo | null> {
+  const planSlug = PLAN_SLUG_MAP[planId];
+  if (!planSlug) return null;
+  try {
+    const productsData = await apiCall("GET", "/products");
+    if (!productsData.success || !Array.isArray(productsData.data)) return null;
+    const product = productsData.data.find((p: any) => p.slug === planSlug.product_slug);
+    const subType = product?.subscription_types?.find((s: any) => s.slug === planSlug.subscription_type_slug);
+    if (!subType) return null;
+    const volumePrices: VolumeTier[] = Array.isArray(subType.volume_prices)
+      ? [...subType.volume_prices].sort((a: VolumeTier, b: VolumeTier) => b.min_qty - a.min_qty)
+      : [];
+    const info: PlanPriceInfo = {
+      basePrice: subType.price,
+      volumePrices,
+      productName: product.name ?? planSlug.name,
+      subscriptionName: subType.name ?? planSlug.name,
+      cachedAt: Date.now(),
+    };
+    planPriceCache[planId] = info;
+    return info;
+  } catch {
+    return null;
+  }
+}
+
+function getCachedPricing(planId: string): PlanPriceInfo | null {
+  const cached = planPriceCache[planId];
+  if (cached && Date.now() - cached.cachedAt < PRICE_CACHE_TTL_MS) return cached;
+  return null;
+}
+
+async function warmPricingCache(): Promise<void> {
+  for (const planId of Object.keys(PLAN_SLUG_MAP)) {
+    await fetchAndCachePricing(planId).catch(() => {});
+  }
+  console.log("[pricing] cache warmed for all plans");
+}
+
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
   await seedAdmin();
+  // Warm pricing cache on startup (non-blocking — purchase falls back to live fetch if cache is cold)
+  warmPricingCache().catch(() => {});
 
   // ── Auth ────────────────────────────────────────────
 
@@ -203,68 +264,175 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.json({ success: false, message: "User not found." });
       }
 
-      // Fetch current price from API
-      const productsData = await apiCall("GET", "/products");
-      if (!productsData.success) {
-        return res.json({ success: false, message: "Could not fetch current pricing." });
-      }
-
-      const product = productsData.data?.find((p: any) => p.slug === planSlug.product_slug);
-      const subType = product?.subscription_types?.find((s: any) => s.slug === planSlug.subscription_type_slug);
-      if (!subType) {
-        return res.json({ success: false, message: "Selected plan is not available." });
-      }
-      if (!subType.in_stock) {
-        return res.json({ success: false, message: "This plan is currently out of stock." });
-      }
-
-      // Apply volume pricing
-      let unitPrice = subType.price;
-      if (subType.volume_prices?.length) {
-        const sorted = [...subType.volume_prices].sort((a: any, b: any) => b.min_qty - a.min_qty);
-        const tier = sorted.find((t: any) => quantity >= t.min_qty);
-        if (tier) unitPrice = tier.price;
-      }
-
-      const totalCents = Math.round(unitPrice * quantity * 100);
-
-      if (user.balanceCents < totalCents) {
-        const shortfall = ((totalCents - user.balanceCents) / 100).toFixed(2);
-        return res.json({
-          success: false,
-          message: `Insufficient balance. You need $${shortfall} more. Please top up your account.`,
-          code: "insufficient_balance",
-        });
-      }
-
+      // ── Helper to call keys.ovh and update the purchase result vars ─────────
       const idempotencyKey = `${user.id}-${planId}-${quantity}-${Date.now()}`;
-      console.log(`[purchase] user=${user.id} plan=${planId} qty=${quantity} total=$${(totalCents/100).toFixed(2)}`);
+      type OvhResult = { keys: string[]; orderNumber: string; product: string; subscription: string; status: string; totalCents: number } | null;
+      async function purchaseFromOvh(fallbackProductName: string, fallbackSubName: string): Promise<OvhResult> {
+        const productsData = await apiCall("GET", "/products");
+        if (!productsData.success) return null;
+        const product = productsData.data?.find((p: any) => p.slug === planSlug.product_slug);
+        const subType = product?.subscription_types?.find((s: any) => s.slug === planSlug.subscription_type_slug);
+        if (!subType || !subType.in_stock) return null;
+        // Update cache with fresh data
+        const volumePrices: VolumeTier[] = Array.isArray(subType.volume_prices)
+          ? [...subType.volume_prices].sort((a: VolumeTier, b: VolumeTier) => b.min_qty - a.min_qty)
+          : [];
+        planPriceCache[planId] = { basePrice: subType.price, volumePrices, productName: product.name ?? planSlug.name, subscriptionName: subType.name ?? planSlug.name, cachedAt: Date.now() };
+        let unitPrice = subType.price;
+        const tier = volumePrices.find((t) => quantity >= t.min_qty);
+        if (tier) unitPrice = tier.price;
+        const tc = Math.round(unitPrice * quantity * 100);
+        if (user.balanceCents < tc) return null; // insufficient — caller handles
+        const purchaseData = await apiCall("POST", "/purchase", {
+          product_slug: planSlug.product_slug,
+          subscription_type_slug: planSlug.subscription_type_slug,
+          quantity,
+          idempotency_key: idempotencyKey,
+        });
+        if (!purchaseData.success) return null;
+        return {
+          keys: purchaseData.data?.keys || [],
+          orderNumber: purchaseData.data?.order_number || idempotencyKey,
+          product: purchaseData.data?.product || product.name || fallbackProductName,
+          subscription: purchaseData.data?.subscription || subType.name || fallbackSubName,
+          status: purchaseData.data?.status || "delivered",
+          totalCents: tc,
+        };
+      }
 
-      // Check admin key inventory first — skip keys.ovh if we have enough stock
-      const availableInInventory = await db.select().from(inventoryKeys)
-        .where(and(eq(inventoryKeys.plan, planId), eq(inventoryKeys.status, "available")))
-        .limit(quantity);
+      // Count available inventory keys for this plan upfront (no keys.ovh call yet)
+      const inventoryCountResult = await db.select({ cnt: sql<number>`COUNT(*)` })
+        .from(inventoryKeys)
+        .where(and(eq(inventoryKeys.plan, planId), eq(inventoryKeys.status, "available")));
+      const inventoryCount = Number(inventoryCountResult[0]?.cnt ?? 0);
+      const useInventory = inventoryCount >= quantity;
 
       let purchasedKeys: string[];
       let orderNumber: string;
       let orderProduct: string;
       let orderSubscription: string;
       let orderStatus: string;
+      let totalCents: number;
 
-      if (availableInInventory.length >= quantity) {
-        // Fulfill from inventory
-        const chosenIds = availableInInventory.map((k) => k.id);
-        await db.update(inventoryKeys)
-          .set({ status: "sold", soldTo: user.id, soldAt: new Date() })
-          .where(inArray(inventoryKeys.id, chosenIds));
-        purchasedKeys = availableInInventory.map((k) => k.key);
-        orderNumber = idempotencyKey;
-        orderProduct = product.name;
-        orderSubscription = subType.name;
-        orderStatus = "delivered";
-        console.log(`[purchase] fulfilled from inventory (${quantity} keys)`);
+      if (useInventory) {
+        // ── Inventory path: zero keys.ovh API calls when cache is warm ───────
+        // Use cached pricing (warmed at startup, refreshed by fallback-path purchases).
+        // If cache is completely cold (first boot + keys.ovh unreachable at startup),
+        // do a single /products fetch now to populate it.
+        let pricing = getCachedPricing(planId) ?? planPriceCache[planId]; // accept stale rather than calling keys.ovh
+        if (!pricing) {
+          // Cache is completely absent — fetch once to populate
+          pricing = await fetchAndCachePricing(planId);
+          if (!pricing) {
+            return res.json({ success: false, message: "Could not fetch current pricing. Please try again shortly." });
+          }
+        }
+
+        const unitPrice = resolvePlanPrice(pricing, quantity);
+        totalCents = Math.round(unitPrice * quantity * 100);
+
+        if (user.balanceCents < totalCents) {
+          const shortfall = ((totalCents - user.balanceCents) / 100).toFixed(2);
+          return res.json({
+            success: false,
+            message: `Insufficient balance. You need $${shortfall} more. Please top up your account.`,
+            code: "insufficient_balance",
+          });
+        }
+
+        console.log(`[purchase] user=${user.id} plan=${planId} qty=${quantity} total=$${(totalCents/100).toFixed(2)} source=inventory`);
+
+        // Atomically allocate exactly `quantity` available keys — FOR UPDATE SKIP LOCKED
+        // prevents concurrent purchases from double-selling the same keys.
+        const allocated = await db.transaction(async (tx) => {
+          const rows = await tx.execute<{ id: number; key: string }>(
+            sql`SELECT id, key FROM inventory_keys
+                WHERE plan = ${planId} AND status = 'available'
+                ORDER BY id
+                LIMIT ${quantity}
+                FOR UPDATE SKIP LOCKED`
+          );
+          if (rows.rows.length < quantity) return null; // Race: someone else grabbed keys
+
+          const ids = rows.rows.map((r) => r.id);
+          await tx.update(inventoryKeys)
+            .set({ status: "sold", soldTo: user.id, soldAt: new Date() })
+            .where(inArray(inventoryKeys.id, ids));
+
+          return rows.rows.map((r) => r.key);
+        });
+
+        if (!allocated) {
+          // Inventory depleted by concurrent request — fall back to keys.ovh
+          console.log(`[purchase] inventory race — falling back to keys.ovh for user=${user.id}`);
+          const ovhResult = await purchaseFromOvh(pricing.productName, pricing.subscriptionName);
+          if (!ovhResult) {
+            return res.json({ success: false, message: "This plan is currently out of stock." });
+          }
+          if (user.balanceCents < ovhResult.totalCents) {
+            const shortfall = ((ovhResult.totalCents - user.balanceCents) / 100).toFixed(2);
+            return res.json({ success: false, message: `Insufficient balance. You need $${shortfall} more.`, code: "insufficient_balance" });
+          }
+          purchasedKeys = ovhResult.keys;
+          orderNumber = ovhResult.orderNumber;
+          orderProduct = ovhResult.product;
+          orderSubscription = ovhResult.subscription;
+          orderStatus = ovhResult.status;
+          totalCents = ovhResult.totalCents;
+        } else {
+          purchasedKeys = allocated;
+          orderNumber = idempotencyKey;
+          orderProduct = pricing.productName;
+          orderSubscription = pricing.subscriptionName;
+          orderStatus = "delivered";
+          console.log(`[purchase] fulfilled from inventory (${quantity} keys)`);
+        }
       } else {
-        // Fall back to keys.ovh
+        // ── keys.ovh fallback path ──────────────────────────────────────────
+        const productsData = await apiCall("GET", "/products");
+        if (!productsData.success) {
+          return res.json({ success: false, message: "Could not fetch current pricing." });
+        }
+
+        const product = productsData.data?.find((p: any) => p.slug === planSlug.product_slug);
+        const subType = product?.subscription_types?.find((s: any) => s.slug === planSlug.subscription_type_slug);
+        if (!subType) {
+          return res.json({ success: false, message: "Selected plan is not available." });
+        }
+        if (!subType.in_stock) {
+          return res.json({ success: false, message: "This plan is currently out of stock." });
+        }
+
+        // Cache this pricing for future inventory-path purchases
+        const volumePricesOvh: VolumeTier[] = Array.isArray(subType.volume_prices)
+          ? [...subType.volume_prices].sort((a: VolumeTier, b: VolumeTier) => b.min_qty - a.min_qty)
+          : [];
+        planPriceCache[planId] = {
+          basePrice: subType.price,
+          volumePrices: volumePricesOvh,
+          productName: product.name ?? planSlug.name,
+          subscriptionName: subType.name ?? planSlug.name,
+          cachedAt: Date.now(),
+        };
+
+        // Apply volume pricing
+        let unitPrice = subType.price;
+        const tier = volumePricesOvh.find((t) => quantity >= t.min_qty);
+        if (tier) unitPrice = tier.price;
+
+        totalCents = Math.round(unitPrice * quantity * 100);
+
+        if (user.balanceCents < totalCents) {
+          const shortfall = ((totalCents - user.balanceCents) / 100).toFixed(2);
+          return res.json({
+            success: false,
+            message: `Insufficient balance. You need $${shortfall} more. Please top up your account.`,
+            code: "insufficient_balance",
+          });
+        }
+
+        console.log(`[purchase] user=${user.id} plan=${planId} qty=${quantity} total=$${(totalCents/100).toFixed(2)} source=keys.ovh`);
+
         const purchaseData = await apiCall("POST", "/purchase", {
           product_slug: planSlug.product_slug,
           subscription_type_slug: planSlug.subscription_type_slug,
@@ -903,9 +1071,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         key: inventoryKeys.key,
         status: inventoryKeys.status,
         soldTo: inventoryKeys.soldTo,
+        soldToEmail: users.email,
+        soldToName: users.name,
         soldAt: inventoryKeys.soldAt,
         createdAt: inventoryKeys.createdAt,
       }).from(inventoryKeys)
+        .leftJoin(users, eq(inventoryKeys.soldTo, users.id))
         .where(conditions.length > 0 ? and(...conditions) : undefined)
         .orderBy(desc(inventoryKeys.createdAt))
         .limit(200);
