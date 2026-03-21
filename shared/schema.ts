@@ -38,10 +38,24 @@ export const orders = pgTable("orders", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
+export const depositRequests = pgTable("deposit_requests", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().references(() => users.id),
+  amountUsdt: text("amount_usdt").notNull(),
+  amountCents: integer("amount_cents").notNull(),
+  network: text("network").notNull(),
+  status: text("status").notNull().default("pending"),
+  txHash: text("tx_hash"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  expiresAt: timestamp("expires_at").notNull(),
+});
+
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true, balanceCents: true, role: true });
 export const insertOrderSchema = createInsertSchema(orders).omit({ id: true, createdAt: true });
+export const insertDepositSchema = createInsertSchema(depositRequests).omit({ id: true, createdAt: true });
 
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type Order = typeof orders.$inferSelect;
 export type Transaction = typeof transactions.$inferSelect;
+export type DepositRequest = typeof depositRequests.$inferSelect;

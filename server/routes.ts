@@ -3,7 +3,12 @@ import { createServer, type Server } from "http";
 import bcrypt from "bcrypt";
 import { eq, desc } from "drizzle-orm";
 import { db } from "./storage";
-import { users, transactions, orders } from "@shared/schema";
+import { users, transactions, orders, depositRequests } from "@shared/schema";
+
+const USDT_BEP20_ADDRESS = process.env.USDT_BEP20_ADDRESS || "0x0c31c91ec2cbb607aeca28c1bc09c55352db2fea";
+const USDT_TRC20_ADDRESS = process.env.USDT_TRC20_ADDRESS || "TLUSXogZfhgWGHpTBHNtNQPanq6AvNfCY4";
+const USDT_BEP20_CONTRACT = "0x55d398326f99059fF775485246999027B3197955";
+const USDT_TRC20_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 
 const CDK_API_KEY = process.env.CDK_API_KEY || "";
 const API_BASE = "https://keys.ovh/api/v1";
@@ -369,6 +374,149 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (err) {
       console.error("Admin orders error:", err);
       return res.status(500).json({ success: false, message: "Could not fetch orders." });
+    }
+  });
+
+  // ── Deposit routes ────────────────────────────────────
+
+  app.post("/api/deposit/create", requireAuth, async (req, res) => {
+    const { amountUsd, network } = req.body;
+    const amount = parseFloat(amountUsd);
+    if (!amountUsd || isNaN(amount) || amount < 1 || amount > 10000) {
+      return res.json({ success: false, message: "Amount must be between $1 and $10,000." });
+    }
+    if (!network || !["bep20", "trc20"].includes(network)) {
+      return res.json({ success: false, message: "Network must be bep20 or trc20." });
+    }
+
+    const amountCents = Math.round(amount * 100);
+    const microOffset = Math.floor(Math.random() * 99) + 1;
+    const totalUnits = Math.round(amount * 10000) + microOffset;
+    const amountUsdt = (totalUnits / 10000).toFixed(4);
+    const expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000);
+    const walletAddress = network === "bep20" ? USDT_BEP20_ADDRESS : USDT_TRC20_ADDRESS;
+
+    try {
+      const [deposit] = await db.insert(depositRequests).values({
+        userId: req.session.userId!,
+        amountUsdt,
+        amountCents,
+        network,
+        status: "pending",
+        expiresAt,
+      }).returning();
+
+      return res.json({
+        success: true,
+        deposit: { id: deposit.id, amountUsdt, amountCents, network, walletAddress, expiresAt: expiresAt.toISOString() },
+      });
+    } catch (err) {
+      console.error("Deposit create error:", err);
+      return res.status(500).json({ success: false, message: "Could not create deposit request." });
+    }
+  });
+
+  app.post("/api/deposit/check/:id", requireAuth, async (req, res) => {
+    const depositId = parseInt(req.params.id, 10);
+    try {
+      const [deposit] = await db.select().from(depositRequests).where(eq(depositRequests.id, depositId));
+      if (!deposit || deposit.userId !== req.session.userId!) {
+        return res.json({ success: false, message: "Deposit request not found." });
+      }
+      if (deposit.status === "completed") {
+        return res.json({ success: true, status: "completed" });
+      }
+      if (new Date() > deposit.expiresAt) {
+        await db.update(depositRequests).set({ status: "expired" }).where(eq(depositRequests.id, depositId));
+        return res.json({ success: false, status: "expired", message: "This deposit request has expired." });
+      }
+
+      const since = deposit.createdAt.getTime() - 60000;
+      let found = false;
+      let txHash: string | null = null;
+
+      if (deposit.network === "bep20") {
+        const url = `https://api.bscscan.com/api?module=account&action=tokentx&contractaddress=${USDT_BEP20_CONTRACT}&address=${USDT_BEP20_ADDRESS}&sort=desc&offset=50&page=1`;
+        const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
+        const data = await response.json();
+        if (data.status === "1" && Array.isArray(data.result)) {
+          const expectedWei = BigInt(Math.round(parseFloat(deposit.amountUsdt) * 10000)) * BigInt("100000000000000");
+          for (const tx of data.result) {
+            if (parseInt(tx.timeStamp) * 1000 < since) break;
+            if (tx.to.toLowerCase() === USDT_BEP20_ADDRESS.toLowerCase() && BigInt(tx.value) === expectedWei) {
+              found = true; txHash = tx.hash; break;
+            }
+          }
+        }
+      } else {
+        const url = `https://apilist.tronscanapi.com/api/token_trc20/transfers?toAddress=${USDT_TRC20_ADDRESS}&contract_address=${USDT_TRC20_CONTRACT}&count=50&start=0&start_timestamp=${since}`;
+        const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
+        const data = await response.json();
+        if (Array.isArray(data.token_transfers)) {
+          const expectedAmount = Math.round(parseFloat(deposit.amountUsdt) * 1000000);
+          for (const tx of data.token_transfers) {
+            const txAmount = parseInt(tx.quant || tx.amount || "0");
+            if (txAmount === expectedAmount) { found = true; txHash = tx.transaction_id; break; }
+          }
+        }
+      }
+
+      if (found && txHash) {
+        const [user] = await db.select().from(users).where(eq(users.id, deposit.userId));
+        if (user) {
+          const newBalance = user.balanceCents + deposit.amountCents;
+          await db.update(users).set({ balanceCents: newBalance }).where(eq(users.id, user.id));
+          await db.update(depositRequests).set({ status: "completed", txHash }).where(eq(depositRequests.id, depositId));
+          await db.insert(transactions).values({
+            userId: user.id,
+            amountCents: deposit.amountCents,
+            type: "credit",
+            description: `USDT top-up via ${deposit.network.toUpperCase()} — ${deposit.amountUsdt} USDT`,
+            createdBy: user.id,
+          });
+          return res.json({ success: true, status: "completed", balanceCents: newBalance });
+        }
+      }
+
+      return res.json({ success: true, status: "pending", message: "Payment not detected yet. Please wait a few minutes and try again." });
+    } catch (err) {
+      console.error("Deposit check error:", err);
+      return res.json({ success: true, status: "pending", message: "Could not reach blockchain. Please wait a moment and try again." });
+    }
+  });
+
+  app.get("/api/me/deposits", requireAuth, async (req, res) => {
+    try {
+      const userDeposits = await db.select().from(depositRequests)
+        .where(eq(depositRequests.userId, req.session.userId!))
+        .orderBy(desc(depositRequests.createdAt));
+      return res.json({ success: true, data: userDeposits });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: "Could not fetch deposits." });
+    }
+  });
+
+  app.get("/api/admin/deposits", requireAdmin, async (_req, res) => {
+    try {
+      const allDeposits = await db.select({
+        id: depositRequests.id,
+        amountUsdt: depositRequests.amountUsdt,
+        amountCents: depositRequests.amountCents,
+        network: depositRequests.network,
+        status: depositRequests.status,
+        txHash: depositRequests.txHash,
+        createdAt: depositRequests.createdAt,
+        expiresAt: depositRequests.expiresAt,
+        userId: depositRequests.userId,
+        userEmail: users.email,
+        userName: users.name,
+      }).from(depositRequests)
+        .innerJoin(users, eq(depositRequests.userId, users.id))
+        .orderBy(desc(depositRequests.createdAt));
+      return res.json({ success: true, data: allDeposits });
+    } catch (err) {
+      console.error("Admin deposits error:", err);
+      return res.status(500).json({ success: false, message: "Could not fetch deposits." });
     }
   });
 

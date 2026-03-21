@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Users, Package, DollarSign, Plus, Copy, Check, Settings } from "lucide-react";
+import { Loader2, Users, Package, DollarSign, Plus, Copy, Check, Settings, ArrowDownToLine } from "lucide-react";
 
 const BINANCE_PAY_ID = "552780449";
 const BINANCE_USERNAME = "User-1d9f7";
@@ -67,6 +67,20 @@ interface AdminOrder {
   userName: string;
 }
 
+interface AdminDeposit {
+  id: number;
+  amountUsdt: string;
+  amountCents: number;
+  network: string;
+  status: string;
+  txHash: string | null;
+  createdAt: string;
+  expiresAt: string;
+  userId: number;
+  userEmail: string;
+  userName: string;
+}
+
 function CreditDialog({
   customer,
   onClose,
@@ -113,7 +127,6 @@ function CreditDialog({
             Adding balance to: <span className="font-medium text-foreground">{customer?.email}</span>
           </div>
 
-          {/* Binance Pay reference */}
           <div className="rounded-lg border border-border bg-muted/20 divide-y divide-border">
             <div className="px-3 py-2">
               <p className="text-xs font-semibold text-muted-foreground mb-1.5">Your Binance Pay (receive USDT here)</p>
@@ -237,22 +250,11 @@ function SettingsTab({ user }: { user: { id: number; name: string; email: string
             <h3 className="text-sm font-semibold text-foreground">Account Details</h3>
             <div>
               <label className="text-sm font-medium text-foreground block mb-1.5">Name</label>
-              <Input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Your name"
-                data-testid="input-settings-name"
-              />
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" data-testid="input-settings-name" />
             </div>
             <div>
               <label className="text-sm font-medium text-foreground block mb-1.5">Email</label>
-              <Input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="admin@example.com"
-                data-testid="input-settings-email"
-              />
+              <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="admin@example.com" data-testid="input-settings-email" />
             </div>
           </CardContent>
         </Card>
@@ -263,45 +265,20 @@ function SettingsTab({ user }: { user: { id: number; name: string; email: string
             <p className="text-xs text-muted-foreground">Leave blank if you don't want to change your password.</p>
             <div>
               <label className="text-sm font-medium text-foreground block mb-1.5">Current password</label>
-              <Input
-                type="password"
-                value={currentPassword}
-                onChange={(e) => setCurrentPassword(e.target.value)}
-                placeholder="••••••••"
-                data-testid="input-settings-current-password"
-                autoComplete="current-password"
-              />
+              <Input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} placeholder="••••••••" data-testid="input-settings-current-password" autoComplete="current-password" />
             </div>
             <div>
               <label className="text-sm font-medium text-foreground block mb-1.5">New password</label>
-              <Input
-                type="password"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="At least 6 characters"
-                data-testid="input-settings-new-password"
-                autoComplete="new-password"
-              />
+              <Input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="At least 6 characters" data-testid="input-settings-new-password" autoComplete="new-password" />
             </div>
             <div>
               <label className="text-sm font-medium text-foreground block mb-1.5">Confirm new password</label>
-              <Input
-                type="password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="Repeat new password"
-                data-testid="input-settings-confirm-password"
-                autoComplete="new-password"
-              />
+              <Input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Repeat new password" data-testid="input-settings-confirm-password" autoComplete="new-password" />
             </div>
           </CardContent>
         </Card>
 
-        <Button
-          type="submit"
-          disabled={!name.trim() || !email.trim() || update.isPending}
-          data-testid="button-save-settings"
-        >
+        <Button type="submit" disabled={!name.trim() || !email.trim() || update.isPending} data-testid="button-save-settings">
           {update.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
           {update.isPending ? "Saving..." : "Save Changes"}
         </Button>
@@ -310,10 +287,76 @@ function SettingsTab({ user }: { user: { id: number; name: string; email: string
   );
 }
 
+function statusColor(status: string) {
+  if (status === "completed") return "bg-green-500/15 text-green-600 dark:text-green-400 border-green-500/20";
+  if (status === "expired") return "bg-red-500/15 text-red-600 dark:text-red-400 border-red-500/20";
+  return "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/20";
+}
+
+function DepositsTab() {
+  const { data, isLoading } = useQuery<{ success: boolean; data: AdminDeposit[] }>({
+    queryKey: ["/api/admin/deposits"],
+  });
+  const deposits = data?.data ?? [];
+
+  if (isLoading) {
+    return <div className="flex items-center justify-center py-12"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>;
+  }
+
+  if (deposits.length === 0) {
+    return (
+      <Card className="border border-card-border">
+        <CardContent className="p-8 text-center">
+          <ArrowDownToLine className="w-10 h-10 text-muted-foreground/40 mx-auto mb-3" />
+          <p className="text-sm text-muted-foreground">No deposit requests yet</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      {deposits.map((d) => (
+        <Card key={d.id} className="border border-card-border" data-testid={`row-deposit-${d.id}`}>
+          <CardContent className="p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 flex-wrap mb-0.5">
+                  <span className="font-semibold text-foreground text-sm">{d.userName}</span>
+                  <span className="text-xs text-muted-foreground">·</span>
+                  <span className="text-xs text-muted-foreground truncate">{d.userEmail}</span>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${statusColor(d.status)}`}>
+                    {d.status}
+                  </span>
+                  <span className="text-xs text-muted-foreground">{d.network.toUpperCase()} · {d.amountUsdt} USDT</span>
+                </div>
+                {d.txHash && (
+                  <div className="text-xs text-muted-foreground mt-0.5 font-mono truncate">
+                    TX: {d.txHash.slice(0, 20)}...
+                  </div>
+                )}
+                <div className="text-xs text-muted-foreground mt-0.5">
+                  {new Date(d.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+                </div>
+              </div>
+              <div className="text-right shrink-0">
+                <div className="font-bold text-foreground">${(d.amountCents / 100).toFixed(2)}</div>
+                <div className="text-xs text-muted-foreground">face value</div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
 export default function AdminPage() {
   const [, navigate] = useLocation();
   const { user, isAdmin, isLoading } = useAuth();
-  const [tab, setTab] = useState<"customers" | "orders" | "settings">("customers");
+  const [tab, setTab] = useState<"customers" | "orders" | "deposits" | "settings">("customers");
   const [creditTarget, setCreditTarget] = useState<Customer | null>(null);
 
   const { data: customersData, isLoading: customersLoading } = useQuery<{ success: boolean; data: Customer[] }>({
@@ -388,18 +431,19 @@ export default function AdminPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 mb-5 border-b border-border">
-        {(["customers", "orders", "settings"] as const).map((t) => (
+      <div className="flex gap-1 mb-5 border-b border-border overflow-x-auto">
+        {(["customers", "orders", "deposits", "settings"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium capitalize border-b-2 transition-colors -mb-px ${
+            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium capitalize border-b-2 transition-colors -mb-px whitespace-nowrap ${
               tab === t ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"
             }`}
             data-testid={`tab-${t}`}
           >
             {t === "settings" && <Settings className="w-3.5 h-3.5" />}
-            {t === "settings" ? "Settings" : t.charAt(0).toUpperCase() + t.slice(1)}
+            {t === "deposits" && <ArrowDownToLine className="w-3.5 h-3.5" />}
+            {t === "deposits" ? "Deposits" : t === "settings" ? "Settings" : t.charAt(0).toUpperCase() + t.slice(1)}
           </button>
         ))}
       </div>
@@ -503,6 +547,9 @@ export default function AdminPage() {
           )}
         </div>
       )}
+
+      {/* Deposits tab */}
+      {tab === "deposits" && <DepositsTab />}
 
       {/* Settings tab */}
       {tab === "settings" && <SettingsTab user={user} />}
