@@ -419,7 +419,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     const amountCents = Math.round(amount * 100);
-    const expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000);
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
     const walletAddress = network === "bep20" ? USDT_BEP20_ADDRESS : USDT_TRC20_ADDRESS;
 
     try {
@@ -483,6 +483,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/deposit/check/:id", requireAuth, async (req, res) => {
     const depositId = parseInt(req.params.id, 10);
+    const userTxHash = typeof req.body.txHash === "string" ? req.body.txHash.trim() : null;
+
     try {
       const [deposit] = await db.select().from(depositRequests).where(eq(depositRequests.id, depositId));
       if (!deposit || deposit.userId !== req.session.userId!) {
@@ -497,84 +499,158 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       const since = deposit.createdAt.getTime() - 60000;
+      const expectedAmountTrc20 = Math.round(parseFloat(deposit.amountUsdt) * 1_000_000);      // 6 decimals
+      const expectedWei = BigInt(Math.round(parseFloat(deposit.amountUsdt) * 10_000)) * BigInt("100000000000000"); // 18 decimals
       let found = false;
       let txHash: string | null = null;
 
-      if (deposit.network === "bep20") {
-        const url = `https://api.bscscan.com/api?module=account&action=tokentx&contractaddress=${USDT_BEP20_CONTRACT}&address=${USDT_BEP20_ADDRESS}&sort=desc&offset=50&page=1`;
-        const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
-        const data = await response.json();
-        if (data.status === "1" && Array.isArray(data.result)) {
-          const expectedWei = BigInt(Math.round(parseFloat(deposit.amountUsdt) * 10000)) * BigInt("100000000000000");
-          for (const tx of data.result) {
-            if (parseInt(tx.timeStamp) * 1000 < since) break;
-            if (tx.to.toLowerCase() === USDT_BEP20_ADDRESS.toLowerCase() && BigInt(tx.value) === expectedWei) {
-              found = true; txHash = tx.hash; break;
-            }
-          }
+      // ── Helper: verify a user-provided TRC-20 tx hash directly ──────────────
+      async function verifyTrc20Hash(hash: string): Promise<boolean> {
+        // Use TronGrid wallet/gettransactioninfobyid to check the transaction
+        const url = `https://api.trongrid.io/wallet/gettransactioninfobyid`;
+        const resp = await fetch(url, {
+          method: "POST",
+          headers: { "Accept": "application/json", "Content-Type": "application/json" },
+          body: JSON.stringify({ value: hash }),
+          signal: AbortSignal.timeout(12000),
+        });
+        if (!resp.ok) return false;
+        const ct = resp.headers.get("content-type") ?? "";
+        if (!ct.includes("application/json")) return false;
+        const data = await resp.json() as { log?: Array<{ address: string; data: string; topics: string[] }> };
+        if (!data?.log) return false;
+        // USDT TRC-20 contract address in hex (without leading T/0x)
+        const contractHex = "a614f803b6fd780986a42c78ec9c7f77e6ded13c"; // TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t in hex
+        // TronGrid logs use hex addresses without 0x prefix
+        // Look for Transfer event: topics[0]=ddf252ad..., topics[2]=to address
+        const transferTopic = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+        for (const log of data.log) {
+          if (log.address?.toLowerCase() !== contractHex.toLowerCase()) continue;
+          if (!log.topics?.[0]?.toLowerCase().includes(transferTopic)) continue;
+          // Amount is in log.data (hex, 32 bytes = 64 hex chars)
+          const amt = log.data ? parseInt(log.data, 16) : 0;
+          if (amt === expectedAmountTrc20) { return true; }
         }
-      } else {
-        // TRC-20: try TronScan first, fall back to TronGrid if unavailable
-        interface TronScanTransfer {
-          transaction_id: string;
-          toAddress: string;
-          quant: string;
-          amount?: string;
-        }
-        interface TronScanResp { token_transfers: TronScanTransfer[]; }
-        interface TronGridTransfer {
-          transaction_id: string;
-          to: string;
-          value: string;
-          quant?: string;
-        }
-        interface TronGridResp { data: TronGridTransfer[]; }
+        return false;
+      }
 
-        const expectedAmount = Math.round(parseFloat(deposit.amountUsdt) * 1000000);
-        let resolved = false;
+      // ── Helper: verify a user-provided BEP-20 tx hash directly ──────────────
+      async function verifyBep20Hash(hash: string): Promise<boolean> {
+        const bscRpc = "https://bsc-dataseed1.binance.org/";
+        const resp = await fetch(bscRpc, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", method: "eth_getTransactionReceipt", params: [hash], id: 1 }),
+          signal: AbortSignal.timeout(12000),
+        });
+        if (!resp.ok) return false;
+        const data = await resp.json() as { result?: { logs?: Array<{ address: string; topics: string[]; data: string }> } };
+        const logs = data?.result?.logs;
+        if (!Array.isArray(logs)) return false;
+        const transferTopic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+        const walletPadded = "0x000000000000000000000000" + USDT_BEP20_ADDRESS.slice(2).toLowerCase();
+        for (const log of logs) {
+          if (log.address?.toLowerCase() !== USDT_BEP20_CONTRACT.toLowerCase()) continue;
+          if (log.topics?.[0]?.toLowerCase() !== transferTopic) continue;
+          if (log.topics?.[2]?.toLowerCase() !== walletPadded) continue;
+          const amt = BigInt(log.data ?? "0x0");
+          if (amt === expectedWei) return true;
+        }
+        return false;
+      }
 
-        // Primary: TronScan
+      // ── If user provided a TX hash: verify it directly ───────────────────────
+      if (userTxHash) {
         try {
-          const tronScanUrl = `https://apilist.tronscanapi.com/api/token_trc20/transfers?toAddress=${USDT_TRC20_ADDRESS}&contract_address=${USDT_TRC20_CONTRACT}&count=50&start=0&start_timestamp=${since}`;
-          const tronScanResp = await fetch(tronScanUrl, {
-            signal: AbortSignal.timeout(10000),
-            headers: { "Accept": "application/json", "User-Agent": "ChatGPT-Recharge/1.0" },
-          });
-          if (tronScanResp.ok) {
-            const contentType = tronScanResp.headers.get("content-type") ?? "";
-            if (contentType.includes("application/json")) {
-              const tronScanData = await tronScanResp.json() as TronScanResp;
-              if (Array.isArray(tronScanData.token_transfers)) {
-                resolved = true;
-                for (const tx of tronScanData.token_transfers) {
-                  const txAmount = parseInt(tx.quant || tx.amount || "0");
-                  if (txAmount === expectedAmount) { found = true; txHash = tx.transaction_id; break; }
-                }
-              }
-            }
+          const verified = deposit.network === "bep20"
+            ? await verifyBep20Hash(userTxHash)
+            : await verifyTrc20Hash(userTxHash);
+          if (verified) {
+            found = true;
+            txHash = userTxHash;
+          } else {
+            // Hash provided but doesn't match — return specific error
+            return res.json({ success: true, status: "pending", message: "Transaction found on blockchain but amount or destination wallet does not match. Double-check the hash and try again." });
           }
-        } catch { /* TronScan unavailable — fall through to TronGrid */ }
+        } catch {
+          return res.json({ success: true, status: "pending", message: "Could not verify transaction hash. Please check it is correct and try again." });
+        }
+      }
 
-        // Fallback: TronGrid (official TRON API, more reliable in production)
-        if (!resolved) {
-          const tronGridUrl = `https://api.trongrid.io/v1/accounts/${USDT_TRC20_ADDRESS}/transactions/trc20?contract_address=${USDT_TRC20_CONTRACT}&limit=50&min_timestamp=${since}&order_by=block_timestamp,desc`;
-          const tronGridResp = await fetch(tronGridUrl, {
-            signal: AbortSignal.timeout(12000),
-            headers: { "Accept": "application/json", "User-Agent": "ChatGPT-Recharge/1.0" },
-          });
-          const contentType = tronGridResp.headers.get("content-type") ?? "";
-          if (tronGridResp.ok && contentType.includes("application/json")) {
-            const tronGridData = await tronGridResp.json() as TronGridResp;
-            if (Array.isArray(tronGridData.data)) {
-              for (const tx of tronGridData.data) {
-                const txAmount = parseInt(tx.value || tx.quant || "0");
-                const toAddr = (tx.to ?? "").toLowerCase();
-                if (toAddr === USDT_TRC20_ADDRESS.toLowerCase() && txAmount === expectedAmount) {
-                  found = true; txHash = tx.transaction_id; break;
+      // ── Fallback: scan recent transactions on our wallet ─────────────────────
+      if (!found) {
+        if (deposit.network === "bep20") {
+          // BEP-20: Use BSC public RPC eth_getLogs in 200-block chunks
+          try {
+            const bscRpc = "https://bsc-dataseed1.binance.org/";
+            const blockResp = await fetch(bscRpc, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ jsonrpc: "2.0", method: "eth_blockNumber", params: [], id: 1 }),
+              signal: AbortSignal.timeout(8000),
+            });
+            const blockData = await blockResp.json() as { result?: string };
+            const latestBlock = parseInt(blockData.result ?? "0x0", 16);
+            // BSC ~3s/block, deposit is max 24h = 28800 blocks. Search in 200-block chunks up to 600 blocks back (~30 min quick scan)
+            const transferTopic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+            const walletPadded = "0x000000000000000000000000" + USDT_BEP20_ADDRESS.slice(2).toLowerCase();
+            const chunkSize = 150;
+            const totalBlocks = Math.min(Math.ceil((Date.now() - since) / 3000), 600);
+            for (let offset = 0; offset < totalBlocks && !found; offset += chunkSize) {
+              const toBlock = latestBlock - offset;
+              const fromBlock = toBlock - chunkSize + 1;
+              const logsResp = await fetch(bscRpc, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  jsonrpc: "2.0", method: "eth_getLogs", id: 1,
+                  params: [{
+                    fromBlock: "0x" + fromBlock.toString(16),
+                    toBlock: "0x" + toBlock.toString(16),
+                    address: USDT_BEP20_CONTRACT,
+                    topics: [transferTopic, null, walletPadded],
+                  }],
+                }),
+                signal: AbortSignal.timeout(10000),
+              });
+              const logsData = await logsResp.json() as { result?: Array<{ data: string; transactionHash: string }> };
+              if (!Array.isArray(logsData.result)) break;
+              for (const log of logsData.result) {
+                const amt = BigInt(log.data ?? "0x0");
+                if (amt === expectedWei) { found = true; txHash = log.transactionHash; break; }
+              }
+            }
+          } catch { /* BSC RPC unavailable */ }
+        } else {
+          // TRC-20: TronGrid scan of wallet's incoming trc20 transactions
+          interface TronGridTransfer {
+            transaction_id: string;
+            to: string;
+            value: string;
+            quant?: string;
+          }
+          interface TronGridResp { data: TronGridTransfer[]; }
+
+          try {
+            const tronGridUrl = `https://api.trongrid.io/v1/accounts/${USDT_TRC20_ADDRESS}/transactions/trc20?contract_address=${USDT_TRC20_CONTRACT}&limit=50&min_timestamp=${since}&order_by=block_timestamp,desc`;
+            const tronGridResp = await fetch(tronGridUrl, {
+              signal: AbortSignal.timeout(12000),
+              headers: { "Accept": "application/json", "User-Agent": "ChatGPT-Recharge/1.0" },
+            });
+            const contentType = tronGridResp.headers.get("content-type") ?? "";
+            if (tronGridResp.ok && contentType.includes("application/json")) {
+              const tronGridData = await tronGridResp.json() as TronGridResp;
+              if (Array.isArray(tronGridData.data)) {
+                for (const tx of tronGridData.data) {
+                  const txAmount = parseInt(tx.value || tx.quant || "0");
+                  const toAddr = (tx.to ?? "").toLowerCase();
+                  if (toAddr === USDT_TRC20_ADDRESS.toLowerCase() && txAmount === expectedAmountTrc20) {
+                    found = true; txHash = tx.transaction_id; break;
+                  }
                 }
               }
             }
-          }
+          } catch { /* TronGrid unavailable */ }
         }
       }
 

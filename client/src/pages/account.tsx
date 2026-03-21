@@ -81,6 +81,7 @@ function TopUpDialog({ open, onClose }: { open: boolean; onClose: () => void }) 
   const [network, setNetwork] = useState<"trc20" | "bep20">("trc20");
   const [deposit, setDeposit] = useState<DepositInfo | null>(null);
   const [checkResult, setCheckResult] = useState<{ status: string; message?: string; balanceCents?: number } | null>(null);
+  const [txHashInput, setTxHashInput] = useState("");
   const countdown = useCountdown(deposit?.expiresAt ?? null);
 
   const reset = () => {
@@ -89,6 +90,7 @@ function TopUpDialog({ open, onClose }: { open: boolean; onClose: () => void }) 
     setNetwork("trc20");
     setDeposit(null);
     setCheckResult(null);
+    setTxHashInput("");
   };
 
   const handleClose = () => { reset(); onClose(); };
@@ -111,7 +113,9 @@ function TopUpDialog({ open, onClose }: { open: boolean; onClose: () => void }) 
 
   const checkDeposit = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", `/api/deposit/check/${deposit!.id}`, {});
+      const body: Record<string, string> = {};
+      if (txHashInput.trim()) body.txHash = txHashInput.trim();
+      const res = await apiRequest("POST", `/api/deposit/check/${deposit!.id}`, body);
       return res.json();
     },
     onSuccess: (data) => {
@@ -250,6 +254,20 @@ function TopUpDialog({ open, onClose }: { open: boolean; onClose: () => void }) 
                 ? <><Loader2 className="w-3 h-3 animate-spin" /> Checking blockchain…</>
                 : <><Clock className="w-3 h-3" /> Auto-checking every 30 seconds</>
               }
+            </div>
+
+            {/* TX Hash input */}
+            <div>
+              <label className="text-xs font-medium text-muted-foreground block mb-1">
+                Transaction Hash <span className="text-muted-foreground/60 font-normal">(optional — paste for instant verification)</span>
+              </label>
+              <Input
+                value={txHashInput}
+                onChange={(e) => setTxHashInput(e.target.value)}
+                placeholder={deposit?.network === "trc20" ? "e.g. abc123def456..." : "e.g. 0xabc123..."}
+                className="font-mono text-xs"
+                data-testid="input-tx-hash"
+              />
             </div>
 
             {/* Check result */}
