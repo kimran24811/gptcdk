@@ -504,9 +504,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       let found = false;
       let txHash: string | null = null;
 
+      // Minimum accepted amount: 95% of the deposit's dollar value (to allow round-number sends)
+      // TRC-20: 1 cent = 10,000 sun (6 decimals). 95% → amountCents * 9500
+      const minSun = deposit.amountCents * 9500;
+      // BEP-20: 1 cent = 10^16 wei (18 decimals). 95% → amountCents * 9_500_000_000_000_000
+      const minWei = BigInt(deposit.amountCents) * BigInt("9500000000000000");
+
       // ── Helper: verify a user-provided TRC-20 tx hash directly ──────────────
-      async function verifyTrc20Hash(hash: string): Promise<boolean> {
-        // Use TronGrid wallet/gettransactioninfobyid to check the transaction
+      async function verifyTrc20Hash(hash: string): Promise<{ ok: boolean; reason?: string }> {
         const url = `https://api.trongrid.io/wallet/gettransactioninfobyid`;
         const resp = await fetch(url, {
           method: "POST",
@@ -514,28 +519,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           body: JSON.stringify({ value: hash }),
           signal: AbortSignal.timeout(12000),
         });
-        if (!resp.ok) return false;
+        if (!resp.ok) return { ok: false, reason: "notfound" };
         const ct = resp.headers.get("content-type") ?? "";
-        if (!ct.includes("application/json")) return false;
+        if (!ct.includes("application/json")) return { ok: false, reason: "notfound" };
         const data = await resp.json() as { log?: Array<{ address: string; data: string; topics: string[] }> };
-        if (!data?.log) return false;
-        // USDT TRC-20 contract address in hex (without leading T/0x)
-        const contractHex = "a614f803b6fd780986a42c78ec9c7f77e6ded13c"; // TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t in hex
-        // TronGrid logs use hex addresses without 0x prefix
-        // Look for Transfer event: topics[0]=ddf252ad..., topics[2]=to address
+        if (!data?.log?.length) return { ok: false, reason: "notfound" };
+        const contractHex = "a614f803b6fd780986a42c78ec9c7f77e6ded13c";
         const transferTopic = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
         for (const log of data.log) {
-          if (log.address?.toLowerCase() !== contractHex.toLowerCase()) continue;
+          if (log.address?.toLowerCase() !== contractHex) continue;
           if (!log.topics?.[0]?.toLowerCase().includes(transferTopic)) continue;
-          // Amount is in log.data (hex, 32 bytes = 64 hex chars)
           const amt = log.data ? parseInt(log.data, 16) : 0;
-          if (amt === expectedAmountTrc20) { return true; }
+          // Accept if amount >= 95% of deposit dollar value
+          if (amt >= minSun) return { ok: true };
         }
-        return false;
+        // Found USDT Transfer logs but none going to our wallet with enough amount
+        return { ok: false, reason: "mismatch" };
       }
 
       // ── Helper: verify a user-provided BEP-20 tx hash directly ──────────────
-      async function verifyBep20Hash(hash: string): Promise<boolean> {
+      async function verifyBep20Hash(hash: string): Promise<{ ok: boolean; reason?: string }> {
         const bscRpc = "https://bsc-dataseed1.binance.org/";
         const resp = await fetch(bscRpc, {
           method: "POST",
@@ -543,10 +546,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           body: JSON.stringify({ jsonrpc: "2.0", method: "eth_getTransactionReceipt", params: [hash], id: 1 }),
           signal: AbortSignal.timeout(12000),
         });
-        if (!resp.ok) return false;
+        if (!resp.ok) return { ok: false, reason: "notfound" };
         const data = await resp.json() as { result?: { logs?: Array<{ address: string; topics: string[]; data: string }> } };
         const logs = data?.result?.logs;
-        if (!Array.isArray(logs)) return false;
+        if (!Array.isArray(logs)) return { ok: false, reason: "notfound" };
         const transferTopic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
         const walletPadded = "0x000000000000000000000000" + USDT_BEP20_ADDRESS.slice(2).toLowerCase();
         for (const log of logs) {
@@ -554,26 +557,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           if (log.topics?.[0]?.toLowerCase() !== transferTopic) continue;
           if (log.topics?.[2]?.toLowerCase() !== walletPadded) continue;
           const amt = BigInt(log.data ?? "0x0");
-          if (amt === expectedWei) return true;
+          // Accept if amount >= 95% of deposit dollar value
+          if (amt >= minWei) return { ok: true };
         }
-        return false;
+        if (!logs.some((l) => l.address?.toLowerCase() === USDT_BEP20_CONTRACT.toLowerCase())) {
+          return { ok: false, reason: "notusdt" };
+        }
+        return { ok: false, reason: "mismatch" };
       }
 
       // ── If user provided a TX hash: verify it directly ───────────────────────
       if (userTxHash) {
         try {
-          const verified = deposit.network === "bep20"
+          const result = deposit.network === "bep20"
             ? await verifyBep20Hash(userTxHash)
             : await verifyTrc20Hash(userTxHash);
-          if (verified) {
+          if (result.ok) {
             found = true;
             txHash = userTxHash;
+          } else if (result.reason === "notfound") {
+            return res.json({ success: true, status: "pending", message: "Transaction not found on blockchain. Make sure you copied the full hash and the transaction is confirmed." });
+          } else if (result.reason === "notusdt") {
+            return res.json({ success: true, status: "pending", message: "This transaction does not contain a USDT transfer. Please check you selected the right network (BEP-20 / TRC-20)." });
           } else {
-            // Hash provided but doesn't match — return specific error
-            return res.json({ success: true, status: "pending", message: "Transaction found on blockchain but amount or destination wallet does not match. Double-check the hash and try again." });
+            return res.json({ success: true, status: "pending", message: "Transaction found, but it was not sent to our receiving wallet. Please verify you used the correct wallet address shown in the dialog." });
           }
         } catch {
-          return res.json({ success: true, status: "pending", message: "Could not verify transaction hash. Please check it is correct and try again." });
+          return res.json({ success: true, status: "pending", message: "Could not reach blockchain to verify your transaction. Please try again in a moment." });
         }
       }
 
