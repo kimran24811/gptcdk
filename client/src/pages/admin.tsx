@@ -294,10 +294,28 @@ function statusColor(status: string) {
 }
 
 function DepositsTab() {
+  const { toast } = useToast();
   const { data, isLoading } = useQuery<{ success: boolean; data: AdminDeposit[] }>({
     queryKey: ["/api/admin/deposits"],
   });
   const deposits = data?.data ?? [];
+
+  const approve = useMutation({
+    mutationFn: async (id: number) => {
+      const res = await apiRequest("POST", `/api/admin/deposits/${id}/approve`, {});
+      return res.json();
+    },
+    onSuccess: (data) => {
+      if (data.success) {
+        toast({ title: "Deposit approved", description: "Balance has been credited to the user." });
+        queryClient.invalidateQueries({ queryKey: ["/api/admin/deposits"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/admin/customers"] });
+      } else {
+        toast({ title: "Failed", description: data.message, variant: "destructive" });
+      }
+    },
+    onError: () => toast({ title: "Error", description: "Could not approve deposit.", variant: "destructive" }),
+  });
 
   if (isLoading) {
     return <div className="flex items-center justify-center py-12"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>;
@@ -332,18 +350,36 @@ function DepositsTab() {
                   </span>
                   <span className="text-xs text-muted-foreground">{d.network.toUpperCase()} · {d.amountUsdt} USDT</span>
                 </div>
-                {d.txHash && (
+                {d.txHash && d.txHash !== "manual-admin-approval" && (
                   <div className="text-xs text-muted-foreground mt-0.5 font-mono truncate">
                     TX: {d.txHash.slice(0, 20)}...
                   </div>
+                )}
+                {d.txHash === "manual-admin-approval" && (
+                  <div className="text-xs text-green-600 dark:text-green-400 mt-0.5">Manually approved</div>
                 )}
                 <div className="text-xs text-muted-foreground mt-0.5">
                   {new Date(d.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
                 </div>
               </div>
-              <div className="text-right shrink-0">
-                <div className="font-bold text-foreground">${(d.amountCents / 100).toFixed(2)}</div>
-                <div className="text-xs text-muted-foreground">face value</div>
+              <div className="flex flex-col items-end gap-2 shrink-0">
+                <div className="text-right">
+                  <div className="font-bold text-foreground">${(d.amountCents / 100).toFixed(2)}</div>
+                  <div className="text-xs text-muted-foreground">face value</div>
+                </div>
+                {d.status === "pending" && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="text-xs gap-1 border-green-500/40 text-green-600 dark:text-green-400 hover:bg-green-500/10"
+                    onClick={() => approve.mutate(d.id)}
+                    disabled={approve.isPending}
+                    data-testid={`button-approve-deposit-${d.id}`}
+                  >
+                    {approve.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                    Approve
+                  </Button>
+                )}
               </div>
             </div>
           </CardContent>

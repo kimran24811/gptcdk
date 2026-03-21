@@ -449,14 +449,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           }
         }
       } else {
-        const url = `https://apilist.tronscanapi.com/api/token_trc20/transfers?toAddress=${USDT_TRC20_ADDRESS}&contract_address=${USDT_TRC20_CONTRACT}&count=50&start=0&start_timestamp=${since}`;
-        const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
-        const data = await response.json();
-        if (Array.isArray(data.token_transfers)) {
+        // TronGrid official API — much more reliable than TronScan
+        const url = `https://api.trongrid.io/v1/accounts/${USDT_TRC20_ADDRESS}/transactions/trc20?contract_address=${USDT_TRC20_CONTRACT}&limit=50&min_timestamp=${since}&order_by=block_timestamp,desc`;
+        const response = await fetch(url, {
+          signal: AbortSignal.timeout(12000),
+          headers: { "Accept": "application/json", "User-Agent": "Mozilla/5.0" },
+        });
+        const text = await response.text();
+        let data: any;
+        try { data = JSON.parse(text); } catch { data = null; }
+        if (data && Array.isArray(data.data)) {
           const expectedAmount = Math.round(parseFloat(deposit.amountUsdt) * 1000000);
-          for (const tx of data.token_transfers) {
-            const txAmount = parseInt(tx.quant || tx.amount || "0");
-            if (txAmount === expectedAmount) { found = true; txHash = tx.transaction_id; break; }
+          for (const tx of data.data) {
+            const txAmount = parseInt(tx.value || tx.quant || "0");
+            const toAddr = (tx.to || "").toLowerCase();
+            if (toAddr === USDT_TRC20_ADDRESS.toLowerCase() && txAmount === expectedAmount) {
+              found = true; txHash = tx.transaction_id; break;
+            }
           }
         }
       }
@@ -493,6 +502,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.json({ success: true, data: userDeposits });
     } catch (err) {
       return res.status(500).json({ success: false, message: "Could not fetch deposits." });
+    }
+  });
+
+  app.post("/api/admin/deposits/:id/approve", requireAdmin, async (req, res) => {
+    const depositId = parseInt(req.params.id, 10);
+    try {
+      const [deposit] = await db.select().from(depositRequests).where(eq(depositRequests.id, depositId));
+      if (!deposit) return res.json({ success: false, message: "Deposit not found." });
+      if (deposit.status === "completed") return res.json({ success: false, message: "Already completed." });
+
+      const [user] = await db.select().from(users).where(eq(users.id, deposit.userId));
+      if (!user) return res.json({ success: false, message: "User not found." });
+
+      const newBalance = user.balanceCents + deposit.amountCents;
+      await db.update(users).set({ balanceCents: newBalance }).where(eq(users.id, user.id));
+      await db.update(depositRequests).set({ status: "completed", txHash: "manual-admin-approval" }).where(eq(depositRequests.id, depositId));
+      await db.insert(transactions).values({
+        userId: user.id,
+        amountCents: deposit.amountCents,
+        type: "credit",
+        description: `Manual top-up via ${deposit.network.toUpperCase()} — ${deposit.amountUsdt} USDT (admin approved)`,
+        createdBy: req.session.userId!,
+      });
+      return res.json({ success: true, newBalance });
+    } catch (err) {
+      console.error("Admin approve deposit error:", err);
+      return res.status(500).json({ success: false, message: "Could not approve deposit." });
     }
   });
 
