@@ -469,22 +469,65 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           }
         }
       } else {
-        // TronGrid official API — much more reliable than TronScan
-        const url = `https://api.trongrid.io/v1/accounts/${USDT_TRC20_ADDRESS}/transactions/trc20?contract_address=${USDT_TRC20_CONTRACT}&limit=50&min_timestamp=${since}&order_by=block_timestamp,desc`;
-        const response = await fetch(url, {
-          signal: AbortSignal.timeout(12000),
-          headers: { "Accept": "application/json", "User-Agent": "Mozilla/5.0" },
-        });
-        const text = await response.text();
-        let data: any;
-        try { data = JSON.parse(text); } catch { data = null; }
-        if (data && Array.isArray(data.data)) {
-          const expectedAmount = Math.round(parseFloat(deposit.amountUsdt) * 1000000);
-          for (const tx of data.data) {
-            const txAmount = parseInt(tx.value || tx.quant || "0");
-            const toAddr = (tx.to || "").toLowerCase();
-            if (toAddr === USDT_TRC20_ADDRESS.toLowerCase() && txAmount === expectedAmount) {
-              found = true; txHash = tx.transaction_id; break;
+        // TRC-20: try TronScan first, fall back to TronGrid if unavailable
+        interface TronScanTransfer {
+          transaction_id: string;
+          toAddress: string;
+          quant: string;
+          amount?: string;
+        }
+        interface TronScanResp { token_transfers: TronScanTransfer[]; }
+        interface TronGridTransfer {
+          transaction_id: string;
+          to: string;
+          value: string;
+          quant?: string;
+        }
+        interface TronGridResp { data: TronGridTransfer[]; }
+
+        const expectedAmount = Math.round(parseFloat(deposit.amountUsdt) * 1000000);
+        let resolved = false;
+
+        // Primary: TronScan
+        try {
+          const tronScanUrl = `https://apilist.tronscanapi.com/api/token_trc20/transfers?toAddress=${USDT_TRC20_ADDRESS}&contract_address=${USDT_TRC20_CONTRACT}&count=50&start=0&start_timestamp=${since}`;
+          const tronScanResp = await fetch(tronScanUrl, {
+            signal: AbortSignal.timeout(10000),
+            headers: { "Accept": "application/json", "User-Agent": "ChatGPT-Recharge/1.0" },
+          });
+          if (tronScanResp.ok) {
+            const contentType = tronScanResp.headers.get("content-type") ?? "";
+            if (contentType.includes("application/json")) {
+              const tronScanData = await tronScanResp.json() as TronScanResp;
+              if (Array.isArray(tronScanData.token_transfers)) {
+                resolved = true;
+                for (const tx of tronScanData.token_transfers) {
+                  const txAmount = parseInt(tx.quant || tx.amount || "0");
+                  if (txAmount === expectedAmount) { found = true; txHash = tx.transaction_id; break; }
+                }
+              }
+            }
+          }
+        } catch { /* TronScan unavailable — fall through to TronGrid */ }
+
+        // Fallback: TronGrid (official TRON API, more reliable in production)
+        if (!resolved) {
+          const tronGridUrl = `https://api.trongrid.io/v1/accounts/${USDT_TRC20_ADDRESS}/transactions/trc20?contract_address=${USDT_TRC20_CONTRACT}&limit=50&min_timestamp=${since}&order_by=block_timestamp,desc`;
+          const tronGridResp = await fetch(tronGridUrl, {
+            signal: AbortSignal.timeout(12000),
+            headers: { "Accept": "application/json", "User-Agent": "ChatGPT-Recharge/1.0" },
+          });
+          const contentType = tronGridResp.headers.get("content-type") ?? "";
+          if (tronGridResp.ok && contentType.includes("application/json")) {
+            const tronGridData = await tronGridResp.json() as TronGridResp;
+            if (Array.isArray(tronGridData.data)) {
+              for (const tx of tronGridData.data) {
+                const txAmount = parseInt(tx.value || tx.quant || "0");
+                const toAddr = (tx.to ?? "").toLowerCase();
+                if (toAddr === USDT_TRC20_ADDRESS.toLowerCase() && txAmount === expectedAmount) {
+                  found = true; txHash = tx.transaction_id; break;
+                }
+              }
             }
           }
         }
@@ -543,6 +586,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/me/deposits", requireAuth, async (req, res) => {
     try {
+      // Reconcile any overdue pending deposits before returning the list
+      await db.update(depositRequests)
+        .set({ status: "expired" })
+        .where(and(
+          eq(depositRequests.userId, req.session.userId!),
+          eq(depositRequests.status, "pending"),
+          sql`expires_at < NOW()`,
+        ));
       const userDeposits = await db.select().from(depositRequests)
         .where(eq(depositRequests.userId, req.session.userId!))
         .orderBy(desc(depositRequests.createdAt));
@@ -595,6 +646,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.get("/api/admin/deposits", requireAdmin, async (_req, res) => {
     try {
+      // Reconcile any overdue pending deposits before returning the list
+      await db.update(depositRequests)
+        .set({ status: "expired" })
+        .where(and(eq(depositRequests.status, "pending"), sql`expires_at < NOW()`));
       const allDeposits = await db.select({
         id: depositRequests.id,
         amountUsdt: depositRequests.amountUsdt,
