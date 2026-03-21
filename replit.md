@@ -62,6 +62,14 @@ Preferred communication style: Simple, everyday language.
 | GET | `/api/admin/customers` | Admin | All customers |
 | POST | `/api/admin/customers/:id/credit` | Admin | Add balance to customer |
 | GET | `/api/admin/orders` | Admin | All orders across all users |
+| POST | `/api/deposit/create` | User | Create USDT deposit request (TRC-20 / BEP-20) |
+| POST | `/api/deposit/check/:id` | User | Check blockchain for matching deposit |
+| GET | `/api/me/deposits` | User | Customer's deposit history |
+| GET | `/api/admin/deposits` | Admin | All deposit requests |
+| POST | `/api/admin/deposits/:id/approve` | Admin | Manually approve a pending deposit |
+| POST | `/api/admin/inventory` | Admin | Bulk add keys to inventory |
+| GET | `/api/admin/inventory` | Admin | List inventory keys with stats |
+| DELETE | `/api/admin/inventory/:id` | Admin | Delete an unsold inventory key |
 | GET | `/api/products` | — | keys.ovh product list |
 | POST | `/api/validate-cdk` | — | Validate CDK key status |
 | POST | `/api/validate-session` | — | Validate ChatGPT session JSON |
@@ -80,6 +88,8 @@ Drizzle ORM with these tables:
 | `users` | id, email, password_hash, name, role (admin\|customer), balance_cents, created_at |
 | `transactions` | id, user_id, amount_cents, type (credit\|debit), description, created_by, created_at |
 | `orders` | id, user_id, order_number, product, subscription, quantity, amount_cents, keys (text[]), status, created_at |
+| `deposit_requests` | id, user_id, amount_usdt, amount_cents, network (trc20\|bep20), status (pending\|completed\|expired), tx_hash, created_at, expires_at |
+| `inventory_keys` | id, plan, key, status (available\|sold), added_by, sold_to, sold_at, created_at |
 | `session` | (managed by connect-pg-simple) |
 
 ### External API: keys.ovh

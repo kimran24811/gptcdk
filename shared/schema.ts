@@ -1,4 +1,4 @@
-import { pgTable, serial, text, integer, timestamp, pgEnum, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, timestamp, pgEnum, uniqueIndex, index } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -57,12 +57,27 @@ export const depositRequests = pgTable("deposit_requests", {
     .where(sql`${table.status} = 'pending'`),
 }));
 
+export const inventoryKeys = pgTable("inventory_keys", {
+  id: serial("id").primaryKey(),
+  plan: text("plan").notNull(),
+  key: text("key").notNull(),
+  status: text("status").notNull().default("available"),
+  addedBy: integer("added_by").notNull().references(() => users.id),
+  soldTo: integer("sold_to").references(() => users.id),
+  soldAt: timestamp("sold_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => ({
+  planStatusIdx: index("idx_inventory_keys_plan_status").on(table.plan, table.status),
+}));
+
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true, balanceCents: true, role: true });
 export const insertOrderSchema = createInsertSchema(orders).omit({ id: true, createdAt: true });
 export const insertDepositSchema = createInsertSchema(depositRequests).omit({ id: true, createdAt: true });
+export const insertInventoryKeySchema = createInsertSchema(inventoryKeys).omit({ id: true, createdAt: true, soldTo: true, soldAt: true });
 
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type Order = typeof orders.$inferSelect;
 export type Transaction = typeof transactions.$inferSelect;
 export type DepositRequest = typeof depositRequests.$inferSelect;
+export type InventoryKey = typeof inventoryKeys.$inferSelect;

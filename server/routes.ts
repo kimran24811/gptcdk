@@ -1,9 +1,9 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import bcrypt from "bcrypt";
-import { eq, desc, and, sql } from "drizzle-orm";
+import { eq, desc, and, sql, inArray, lt } from "drizzle-orm";
 import { db } from "./storage";
-import { users, transactions, orders, depositRequests } from "@shared/schema";
+import { users, transactions, orders, depositRequests, inventoryKeys } from "@shared/schema";
 
 const USDT_BEP20_ADDRESS = process.env.USDT_BEP20_ADDRESS || "0x0c31c91ec2cbb607aeca28c1bc09c55352db2fea";
 const USDT_TRC20_ADDRESS = process.env.USDT_TRC20_ADDRESS || "TLUSXogZfhgWGHpTBHNtNQPanq6AvNfCY4";
@@ -237,29 +237,58 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         });
       }
 
-      // Purchase from keys.ovh
       const idempotencyKey = `${user.id}-${planId}-${quantity}-${Date.now()}`;
       console.log(`[purchase] user=${user.id} plan=${planId} qty=${quantity} total=$${(totalCents/100).toFixed(2)}`);
 
-      const purchaseData = await apiCall("POST", "/purchase", {
-        product_slug: planSlug.product_slug,
-        subscription_type_slug: planSlug.subscription_type_slug,
-        quantity,
-        idempotency_key: idempotencyKey,
-      });
+      // Check admin key inventory first — skip keys.ovh if we have enough stock
+      const availableInInventory = await db.select().from(inventoryKeys)
+        .where(and(eq(inventoryKeys.plan, planId), eq(inventoryKeys.status, "available")))
+        .limit(quantity);
 
-      if (!purchaseData.success) {
-        const errMap: Record<string, string> = {
-          out_of_stock: "This plan is currently out of stock.",
-          insufficient_balance: "We are unable to process your order at this time. Please contact us on WhatsApp: +447577308067",
-          product_not_found: "Product not found.",
-          subscription_not_found: "Subscription type not found.",
-        };
-        const msg = errMap[purchaseData.error] || purchaseData.message || "Purchase failed. Please try again.";
-        return res.json({ success: false, message: msg });
+      let purchasedKeys: string[];
+      let orderNumber: string;
+      let orderProduct: string;
+      let orderSubscription: string;
+      let orderStatus: string;
+
+      if (availableInInventory.length >= quantity) {
+        // Fulfill from inventory
+        const chosenIds = availableInInventory.map((k) => k.id);
+        await db.update(inventoryKeys)
+          .set({ status: "sold", soldTo: user.id, soldAt: new Date() })
+          .where(inArray(inventoryKeys.id, chosenIds));
+        purchasedKeys = availableInInventory.map((k) => k.key);
+        orderNumber = idempotencyKey;
+        orderProduct = product.name;
+        orderSubscription = subType.name;
+        orderStatus = "delivered";
+        console.log(`[purchase] fulfilled from inventory (${quantity} keys)`);
+      } else {
+        // Fall back to keys.ovh
+        const purchaseData = await apiCall("POST", "/purchase", {
+          product_slug: planSlug.product_slug,
+          subscription_type_slug: planSlug.subscription_type_slug,
+          quantity,
+          idempotency_key: idempotencyKey,
+        });
+
+        if (!purchaseData.success) {
+          const errMap: Record<string, string> = {
+            out_of_stock: "This plan is currently out of stock.",
+            insufficient_balance: "We are unable to process your order at this time. Please contact us on WhatsApp: +447577308067",
+            product_not_found: "Product not found.",
+            subscription_not_found: "Subscription type not found.",
+          };
+          const msg = errMap[purchaseData.error] || purchaseData.message || "Purchase failed. Please try again.";
+          return res.json({ success: false, message: msg });
+        }
+
+        purchasedKeys = purchaseData.data?.keys || [];
+        orderNumber = purchaseData.data?.order_number || idempotencyKey;
+        orderProduct = purchaseData.data?.product || product.name;
+        orderSubscription = purchaseData.data?.subscription || subType.name;
+        orderStatus = purchaseData.data?.status || "delivered";
       }
-
-      const purchasedKeys: string[] = purchaseData.data?.keys || [];
 
       // Deduct balance and save order atomically
       await db.update(users)
@@ -270,19 +299,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         userId: user.id,
         amountCents: totalCents,
         type: "debit",
-        description: `${planSlug.name} x${quantity} — Order #${purchaseData.data?.order_number}`,
+        description: `${planSlug.name} x${quantity} — Order #${orderNumber}`,
         createdBy: user.id,
       });
 
       const [savedOrder] = await db.insert(orders).values({
         userId: user.id,
-        orderNumber: purchaseData.data?.order_number || idempotencyKey,
-        product: purchaseData.data?.product || product.name,
-        subscription: purchaseData.data?.subscription || subType.name,
+        orderNumber,
+        product: orderProduct,
+        subscription: orderSubscription,
         quantity,
         amountCents: totalCents,
         keys: purchasedKeys,
-        status: purchaseData.data?.status || "delivered",
+        status: orderStatus,
       }).returning();
 
       const newBalance = user.balanceCents - totalCents;
@@ -743,6 +772,81 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (err) {
       console.error("Profile update error:", err);
       return res.status(500).json({ success: false, message: "Could not update profile." });
+    }
+  });
+
+  // ── Admin key inventory routes ───────────────────────
+
+  app.post("/api/admin/inventory", requireAdmin, async (req, res) => {
+    const { plan, keys } = req.body;
+    const validPlans = ["plus-1m", "plus-1y", "go-1y", "pro-1m"];
+    if (!plan || !validPlans.includes(plan)) {
+      return res.json({ success: false, message: "Valid plan is required." });
+    }
+    if (!Array.isArray(keys) || keys.length === 0) {
+      return res.json({ success: false, message: "At least one key is required." });
+    }
+    const cleanKeys: string[] = keys.map((k: string) => k.trim()).filter((k: string) => k.length > 0);
+    if (cleanKeys.length === 0) {
+      return res.json({ success: false, message: "No valid keys found after trimming." });
+    }
+    if (cleanKeys.length > 500) {
+      return res.json({ success: false, message: "Maximum 500 keys per batch." });
+    }
+    try {
+      const rows = cleanKeys.map((k) => ({ plan, key: k, status: "available" as const, addedBy: req.session.userId! }));
+      await db.insert(inventoryKeys).values(rows);
+      return res.json({ success: true, added: cleanKeys.length });
+    } catch (err) {
+      console.error("Inventory insert error:", err);
+      return res.status(500).json({ success: false, message: "Could not save keys." });
+    }
+  });
+
+  app.get("/api/admin/inventory", requireAdmin, async (req, res) => {
+    const planFilter = req.query.plan as string | undefined;
+    const statusFilter = req.query.status as string | undefined;
+    try {
+      const conditions = [];
+      if (planFilter) conditions.push(eq(inventoryKeys.plan, planFilter));
+      if (statusFilter) conditions.push(eq(inventoryKeys.status, statusFilter));
+
+      const rows = await db.select({
+        id: inventoryKeys.id,
+        plan: inventoryKeys.plan,
+        key: inventoryKeys.key,
+        status: inventoryKeys.status,
+        soldTo: inventoryKeys.soldTo,
+        soldAt: inventoryKeys.soldAt,
+        createdAt: inventoryKeys.createdAt,
+      }).from(inventoryKeys)
+        .where(conditions.length > 0 ? and(...conditions) : undefined)
+        .orderBy(desc(inventoryKeys.createdAt))
+        .limit(200);
+
+      // Summary: count available/sold per plan
+      const summary = await db.execute<{ plan: string; status: string; cnt: string }>(
+        sql`SELECT plan, status, COUNT(*) as cnt FROM inventory_keys GROUP BY plan, status`
+      );
+
+      return res.json({ success: true, data: rows, summary: summary.rows });
+    } catch (err) {
+      console.error("Inventory fetch error:", err);
+      return res.status(500).json({ success: false, message: "Could not fetch inventory." });
+    }
+  });
+
+  app.delete("/api/admin/inventory/:id", requireAdmin, async (req, res) => {
+    const keyId = parseInt(req.params.id, 10);
+    try {
+      const [key] = await db.select().from(inventoryKeys).where(eq(inventoryKeys.id, keyId));
+      if (!key) return res.json({ success: false, message: "Key not found." });
+      if (key.status !== "available") return res.json({ success: false, message: "Only unsold keys can be deleted." });
+      await db.delete(inventoryKeys).where(eq(inventoryKeys.id, keyId));
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("Inventory delete error:", err);
+      return res.status(500).json({ success: false, message: "Could not delete key." });
     }
   });
 

@@ -123,12 +123,20 @@ function TopUpDialog({ open, onClose }: { open: boolean; onClose: () => void }) 
       } else if (data.status === "expired") {
         toast({ title: "Expired", description: data.message, variant: "destructive" });
         handleClose();
-      } else {
-        toast({ title: "Not detected yet", description: data.message });
       }
+      // No toast on pending — dialog already shows the status inline
     },
-    onError: () => toast({ title: "Error", description: "Could not check payment.", variant: "destructive" }),
+    onError: () => { /* silent on auto-check; user sees "I Paid" state */ },
   });
+
+  // Auto-poll every 30 seconds while on step 2 waiting for payment
+  useEffect(() => {
+    if (step !== 2 || !deposit) return;
+    const interval = setInterval(() => {
+      if (!checkDeposit.isPending) checkDeposit.mutate();
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [step, deposit]);
 
   const networkLabel = network === "trc20" ? "TRC-20 (TRON)" : "BEP-20 (BSC)";
 
@@ -236,6 +244,14 @@ function TopUpDialog({ open, onClose }: { open: boolean; onClose: () => void }) 
               <span>Expires in <span className="font-mono font-semibold text-foreground">{countdown}</span></span>
             </div>
 
+            {/* Auto-check status */}
+            <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
+              {checkDeposit.isPending
+                ? <><Loader2 className="w-3 h-3 animate-spin" /> Checking blockchain…</>
+                : <><Clock className="w-3 h-3" /> Auto-checking every 30 seconds</>
+              }
+            </div>
+
             {/* Check result */}
             {checkResult?.status === "pending" && (
               <div className="flex gap-2 p-2.5 rounded-lg bg-muted/50 border border-border">
@@ -256,7 +272,7 @@ function TopUpDialog({ open, onClose }: { open: boolean; onClose: () => void }) 
                 data-testid="button-i-paid"
               >
                 {checkDeposit.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-                {checkDeposit.isPending ? "Checking..." : "I Paid"}
+                {checkDeposit.isPending ? "Checking..." : "I Paid — Check Now"}
               </Button>
             </div>
           </div>

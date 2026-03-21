@@ -10,7 +10,9 @@ import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Users, Package, DollarSign, Plus, Copy, Check, Settings, ArrowDownToLine } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Loader2, Users, Package, DollarSign, Plus, Copy, Check, Settings, ArrowDownToLine, Key, Trash2 } from "lucide-react";
 
 const BINANCE_PAY_ID = "552780449";
 const BINANCE_USERNAME = "User-1d9f7";
@@ -389,10 +391,237 @@ function DepositsTab() {
   );
 }
 
+const PLAN_LABELS: Record<string, string> = {
+  "plus-1m":  "ChatGPT Plus 1 Month",
+  "plus-1y":  "ChatGPT Plus 1 Year",
+  "go-1y":    "ChatGPT GO 1 Year",
+  "pro-1m":   "ChatGPT Pro 1 Month",
+};
+
+interface InventoryKey {
+  id: number;
+  plan: string;
+  key: string;
+  status: string;
+  soldTo: number | null;
+  soldAt: string | null;
+  createdAt: string;
+}
+
+interface InventorySummaryRow { plan: string; status: string; cnt: string; }
+
+function KeyInventoryTab() {
+  const { toast } = useToast();
+  const [selectedPlan, setSelectedPlan] = useState("plus-1m");
+  const [keysText, setKeysText] = useState("");
+  const [filterPlan, setFilterPlan] = useState("all");
+  const [filterStatus, setFilterStatus] = useState("all");
+
+  const { data, isLoading, refetch } = useQuery<{ success: boolean; data: InventoryKey[]; summary: InventorySummaryRow[] }>({
+    queryKey: ["/api/admin/inventory", filterPlan, filterStatus],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (filterPlan !== "all") params.set("plan", filterPlan);
+      if (filterStatus !== "all") params.set("status", filterStatus);
+      const res = await fetch(`/api/admin/inventory?${params}`, { credentials: "include" });
+      return res.json();
+    },
+  });
+
+  const keys = data?.data ?? [];
+  const summary = data?.summary ?? [];
+
+  const planSummary = (plan: string) => {
+    const available = summary.find((s) => s.plan === plan && s.status === "available");
+    const sold = summary.find((s) => s.plan === plan && s.status === "sold");
+    return { available: parseInt(available?.cnt ?? "0"), sold: parseInt(sold?.cnt ?? "0") };
+  };
+
+  const addKeys = useMutation({
+    mutationFn: async () => {
+      const parsed = keysText.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+      const res = await apiRequest("POST", "/api/admin/inventory", { plan: selectedPlan, keys: parsed });
+      return res.json();
+    },
+    onSuccess: (d) => {
+      if (d.success) {
+        toast({ title: "Keys added", description: `${d.added} key${d.added !== 1 ? "s" : ""} added to ${PLAN_LABELS[selectedPlan]}` });
+        setKeysText("");
+        refetch();
+      } else {
+        toast({ title: "Failed", description: d.message, variant: "destructive" });
+      }
+    },
+    onError: () => toast({ title: "Error", description: "Could not add keys.", variant: "destructive" }),
+  });
+
+  const deleteKey = useMutation({
+    mutationFn: async (id: number) => {
+      const res = await apiRequest("DELETE", `/api/admin/inventory/${id}`, {});
+      return res.json();
+    },
+    onSuccess: (d) => {
+      if (d.success) {
+        toast({ title: "Key deleted" });
+        refetch();
+      } else {
+        toast({ title: "Failed", description: d.message, variant: "destructive" });
+      }
+    },
+    onError: () => toast({ title: "Error", description: "Could not delete key.", variant: "destructive" }),
+  });
+
+  const lineCount = keysText.split("\n").filter((l) => l.trim()).length;
+
+  return (
+    <div className="space-y-5">
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {Object.entries(PLAN_LABELS).map(([planId, label]) => {
+          const { available, sold } = planSummary(planId);
+          return (
+            <Card key={planId} className="border border-card-border">
+              <CardContent className="p-3">
+                <div className="text-xs text-muted-foreground font-medium mb-1 truncate">{label}</div>
+                <div className="flex items-baseline gap-1.5">
+                  <span className="text-lg font-bold text-foreground" data-testid={`stat-inventory-available-${planId}`}>{available}</span>
+                  <span className="text-xs text-muted-foreground">avail</span>
+                </div>
+                <div className="text-xs text-muted-foreground">{sold} sold</div>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+
+      {/* Add keys form */}
+      <Card className="border border-card-border">
+        <CardContent className="p-5 space-y-4">
+          <h3 className="text-sm font-semibold text-foreground">Add Keys to Inventory</h3>
+          <div>
+            <label className="text-sm font-medium text-foreground block mb-1.5">Plan</label>
+            <Select value={selectedPlan} onValueChange={setSelectedPlan}>
+              <SelectTrigger data-testid="select-inventory-plan">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(PLAN_LABELS).map(([id, label]) => (
+                  <SelectItem key={id} value={id}>{label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <label className="text-sm font-medium text-foreground block mb-1.5">
+              Keys <span className="text-muted-foreground font-normal">(one per line)</span>
+            </label>
+            <Textarea
+              value={keysText}
+              onChange={(e) => setKeysText(e.target.value)}
+              placeholder={"XXXX-XXXX-XXXX-XXXX\nXXXX-XXXX-XXXX-XXXX\n..."}
+              className="font-mono text-xs min-h-[120px] resize-y"
+              data-testid="textarea-inventory-keys"
+            />
+            {lineCount > 0 && <p className="text-xs text-muted-foreground mt-1">{lineCount} key{lineCount !== 1 ? "s" : ""} detected</p>}
+          </div>
+          <Button
+            onClick={() => addKeys.mutate()}
+            disabled={addKeys.isPending || !keysText.trim()}
+            className="w-full gap-1.5"
+            data-testid="button-add-keys"
+          >
+            {addKeys.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+            {addKeys.isPending ? "Adding…" : `Add ${lineCount > 0 ? lineCount : ""} Keys`}
+          </Button>
+        </CardContent>
+      </Card>
+
+      {/* Keys list */}
+      <div>
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
+          <h3 className="text-sm font-semibold text-foreground flex-1">Key List</h3>
+          <Select value={filterPlan} onValueChange={setFilterPlan}>
+            <SelectTrigger className="w-40 h-8 text-xs" data-testid="select-filter-plan">
+              <SelectValue placeholder="All plans" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All plans</SelectItem>
+              {Object.entries(PLAN_LABELS).map(([id, label]) => (
+                <SelectItem key={id} value={id}>{label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={filterStatus} onValueChange={setFilterStatus}>
+            <SelectTrigger className="w-28 h-8 text-xs" data-testid="select-filter-status">
+              <SelectValue placeholder="All" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All status</SelectItem>
+              <SelectItem value="available">Available</SelectItem>
+              <SelectItem value="sold">Sold</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        {isLoading ? (
+          <div className="flex items-center justify-center py-12"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>
+        ) : keys.length === 0 ? (
+          <Card className="border border-card-border">
+            <CardContent className="p-8 text-center">
+              <Key className="w-10 h-10 text-muted-foreground/40 mx-auto mb-3" />
+              <p className="text-sm text-muted-foreground">No keys in inventory</p>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-1.5">
+            {keys.map((k) => (
+              <Card key={k.id} className="border border-card-border" data-testid={`row-key-${k.id}`}>
+                <CardContent className="p-3 flex items-center gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap mb-0.5">
+                      <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium border ${
+                        k.status === "available"
+                          ? "bg-green-500/10 text-green-600 dark:text-green-400 border-green-500/20"
+                          : "bg-muted text-muted-foreground border-border"
+                      }`}>{k.status}</span>
+                      <span className="text-xs text-muted-foreground">{PLAN_LABELS[k.plan] ?? k.plan}</span>
+                    </div>
+                    <div className="font-mono text-xs text-foreground truncate" data-testid={`text-key-${k.id}`}>
+                      {k.key.length > 40 ? `${k.key.slice(0, 20)}…${k.key.slice(-10)}` : k.key}
+                    </div>
+                    {k.soldAt && (
+                      <div className="text-xs text-muted-foreground mt-0.5">
+                        Sold {new Date(k.soldAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <CopyBtn text={k.key} />
+                    {k.status === "available" && (
+                      <button
+                        onClick={() => deleteKey.mutate(k.id)}
+                        disabled={deleteKey.isPending}
+                        className="flex items-center gap-1 px-2 py-1 rounded border border-border bg-background text-muted-foreground hover:text-red-500 hover:border-red-500/40 text-xs transition-all"
+                        data-testid={`button-delete-key-${k.id}`}
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function AdminPage() {
   const [, navigate] = useLocation();
   const { user, isAdmin, isLoading } = useAuth();
-  const [tab, setTab] = useState<"customers" | "orders" | "deposits" | "settings">("customers");
+  const [tab, setTab] = useState<"customers" | "orders" | "deposits" | "inventory" | "settings">("customers");
   const [creditTarget, setCreditTarget] = useState<Customer | null>(null);
 
   const { data: customersData, isLoading: customersLoading } = useQuery<{ success: boolean; data: Customer[] }>({
@@ -468,7 +697,7 @@ export default function AdminPage() {
 
       {/* Tabs */}
       <div className="flex gap-1 mb-5 border-b border-border overflow-x-auto">
-        {(["customers", "orders", "deposits", "settings"] as const).map((t) => (
+        {(["customers", "orders", "deposits", "inventory", "settings"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -479,7 +708,8 @@ export default function AdminPage() {
           >
             {t === "settings" && <Settings className="w-3.5 h-3.5" />}
             {t === "deposits" && <ArrowDownToLine className="w-3.5 h-3.5" />}
-            {t === "deposits" ? "Deposits" : t === "settings" ? "Settings" : t.charAt(0).toUpperCase() + t.slice(1)}
+            {t === "inventory" && <Key className="w-3.5 h-3.5" />}
+            {t === "deposits" ? "Deposits" : t === "settings" ? "Settings" : t === "inventory" ? "Keys" : t.charAt(0).toUpperCase() + t.slice(1)}
           </button>
         ))}
       </div>
@@ -586,6 +816,9 @@ export default function AdminPage() {
 
       {/* Deposits tab */}
       {tab === "deposits" && <DepositsTab />}
+
+      {/* Key Inventory tab */}
+      {tab === "inventory" && <KeyInventoryTab />}
 
       {/* Settings tab */}
       {tab === "settings" && <SettingsTab user={user} />}
