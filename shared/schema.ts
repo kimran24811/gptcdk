@@ -1,4 +1,5 @@
-import { pgTable, serial, text, integer, timestamp, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, timestamp, pgEnum, uniqueIndex } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -48,7 +49,13 @@ export const depositRequests = pgTable("deposit_requests", {
   txHash: text("tx_hash"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   expiresAt: timestamp("expires_at").notNull(),
-});
+}, (table) => ({
+  // Partial unique index: no two active pending deposits can share (network, amount_usdt)
+  // This enforces the unique micro-amount identification even under concurrent requests.
+  uniqPendingDepositAmount: uniqueIndex("uniq_pending_deposit_amount")
+    .on(table.network, table.amountUsdt)
+    .where(sql`${table.status} = 'pending'`),
+}));
 
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true, balanceCents: true, role: true });
 export const insertOrderSchema = createInsertSchema(orders).omit({ id: true, createdAt: true });
