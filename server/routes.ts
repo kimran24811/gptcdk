@@ -417,14 +417,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(503).json({ success: false, message: "Could not generate a unique deposit amount. Please try again shortly." });
       }
 
-      const [deposit] = await db.insert(depositRequests).values({
-        userId: req.session.userId!,
-        amountUsdt,
-        amountCents,
-        network,
-        status: "pending",
-        expiresAt,
-      }).returning();
+      // Insert — partial unique index (status='pending', network, amount_usdt) enforces
+      // uniqueness at DB level even if two concurrent requests bypass the pre-check.
+      let deposit;
+      try {
+        [deposit] = await db.insert(depositRequests).values({
+          userId: req.session.userId!,
+          amountUsdt,
+          amountCents,
+          network,
+          status: "pending",
+          expiresAt,
+        }).returning();
+      } catch (insertErr: unknown) {
+        const errMsg = insertErr instanceof Error ? insertErr.message : String(insertErr);
+        if (errMsg.includes("uniq_pending_deposit_amount")) {
+          // Concurrent request grabbed the same amount — tell the user to retry
+          return res.status(503).json({ success: false, message: "Could not generate a unique deposit amount. Please try again." });
+        }
+        throw insertErr;
+      }
+
+      if (!deposit) {
+        return res.status(500).json({ success: false, message: "Could not create deposit request." });
+      }
 
       return res.json({
         success: true,
@@ -573,8 +589,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (result !== null) {
           return res.json({ success: true, status: "completed", balanceCents: result });
         }
-        // Concurrent request already processed — return current status
-        return res.json({ success: true, status: "completed" });
+        // result is null — either concurrent request completed this deposit OR
+        // the matched txHash was already claimed by a different deposit.
+        // Re-fetch the deposit to return accurate current status.
+        const [current] = await db.select({ status: depositRequests.status })
+          .from(depositRequests).where(eq(depositRequests.id, depositId)).limit(1);
+        if (current?.status === "completed") {
+          return res.json({ success: true, status: "completed" });
+        }
+        return res.json({ success: true, status: "pending", message: "Payment not detected yet. Please wait a few minutes and try again." });
       }
 
       return res.json({ success: true, status: "pending", message: "Payment not detected yet. Please wait a few minutes and try again." });
