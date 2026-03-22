@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, Users, Package, DollarSign, Plus, Copy, Check, Settings, ArrowDownToLine, Key, Trash2 } from "lucide-react";
+import { Loader2, Users, Package, DollarSign, Plus, Copy, Check, Settings, ArrowDownToLine, Key, Trash2, Search, Minus, ShoppingBag, AlertTriangle } from "lucide-react";
 
 const BINANCE_PAY_ID = "552780449";
 const BINANCE_USERNAME = "User-1d9f7";
@@ -83,20 +83,34 @@ interface AdminDeposit {
   userName: string;
 }
 
-function CreditDialog({
+interface CustomerOrder {
+  id: number;
+  orderNumber: string;
+  subscription: string;
+  quantity: number;
+  amountCents: number;
+  keys: string[];
+  status: string;
+  createdAt: string;
+}
+
+function BalanceDialog({
   customer,
+  mode,
   onClose,
 }: {
   customer: Customer | null;
+  mode: "credit" | "debit";
   onClose: () => void;
 }) {
   const { toast } = useToast();
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
 
-  const credit = useMutation({
+  const mutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", `/api/admin/customers/${customer!.id}/credit`, {
+      const endpoint = mode === "credit" ? "credit" : "debit";
+      const res = await apiRequest("POST", `/api/admin/customers/${customer!.id}/${endpoint}`, {
         amountUsd: amount,
         description: description.trim() || undefined,
       });
@@ -104,7 +118,8 @@ function CreditDialog({
     },
     onSuccess: (data) => {
       if (data.success) {
-        toast({ title: "Balance added", description: `$${parseFloat(amount).toFixed(2)} added to ${customer!.email}` });
+        const verb = mode === "credit" ? "added to" : "deducted from";
+        toast({ title: mode === "credit" ? "Balance added" : "Balance reduced", description: `$${parseFloat(amount).toFixed(2)} ${verb} ${customer!.email}` });
         queryClient.invalidateQueries({ queryKey: ["/api/admin/customers"] });
         onClose();
         setAmount("");
@@ -114,7 +129,7 @@ function CreditDialog({
       }
     },
     onError: () => {
-      toast({ title: "Error", description: "Could not add balance.", variant: "destructive" });
+      toast({ title: "Error", description: "Could not update balance.", variant: "destructive" });
     },
   });
 
@@ -122,77 +137,163 @@ function CreditDialog({
     <Dialog open={!!customer} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
-          <DialogTitle>Add Balance</DialogTitle>
+          <DialogTitle>{mode === "credit" ? "Add Balance" : "Reduce Balance"}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4 pt-2">
           <div className="text-sm text-muted-foreground">
-            Adding balance to: <span className="font-medium text-foreground">{customer?.email}</span>
+            {mode === "credit" ? "Adding to" : "Deducting from"}:{" "}
+            <span className="font-medium text-foreground">{customer?.email}</span>
+          </div>
+          <div className="text-xs text-muted-foreground bg-muted/40 rounded px-3 py-2">
+            Current balance: <span className="font-semibold text-foreground">${((customer?.balanceCents ?? 0) / 100).toFixed(2)}</span>
           </div>
 
-          <div className="rounded-lg border border-border bg-muted/20 divide-y divide-border">
-            <div className="px-3 py-2">
-              <p className="text-xs font-semibold text-muted-foreground mb-1.5">Your Binance Pay (receive USDT here)</p>
-            </div>
-            <div className="flex items-center justify-between px-3 py-2 gap-2">
-              <div>
-                <div className="text-xs text-muted-foreground">Pay ID</div>
-                <div className="font-mono font-bold text-foreground text-sm">{BINANCE_PAY_ID}</div>
+          {mode === "credit" && (
+            <div className="rounded-lg border border-border bg-muted/20 divide-y divide-border">
+              <div className="px-3 py-2">
+                <p className="text-xs font-semibold text-muted-foreground">Your Binance Pay (receive USDT here)</p>
               </div>
-              <CopyBtn text={BINANCE_PAY_ID} />
-            </div>
-            <div className="flex items-center justify-between px-3 py-2 gap-2">
-              <div>
-                <div className="text-xs text-muted-foreground">Username</div>
-                <div className="font-mono font-semibold text-foreground text-sm">{BINANCE_USERNAME}</div>
+              <div className="flex items-center justify-between px-3 py-2 gap-2">
+                <div><div className="text-xs text-muted-foreground">Pay ID</div><div className="font-mono font-bold text-foreground text-sm">{BINANCE_PAY_ID}</div></div>
+                <CopyBtn text={BINANCE_PAY_ID} />
               </div>
-              <CopyBtn text={BINANCE_USERNAME} />
-            </div>
-            <div className="flex items-center justify-between px-3 py-2 gap-2">
-              <div>
-                <div className="text-xs text-muted-foreground">WhatsApp</div>
-                <div className="font-mono font-semibold text-foreground text-sm">{WHATSAPP}</div>
+              <div className="flex items-center justify-between px-3 py-2 gap-2">
+                <div><div className="text-xs text-muted-foreground">WhatsApp</div><div className="font-mono font-semibold text-foreground text-sm">{WHATSAPP}</div></div>
+                <CopyBtn text={WHATSAPP} />
               </div>
-              <CopyBtn text={WHATSAPP} />
             </div>
-          </div>
+          )}
 
           <div>
-            <label className="text-sm font-medium text-foreground block mb-1.5">Amount to credit (USD)</label>
+            <label className="text-sm font-medium text-foreground block mb-1.5">
+              Amount (USD)
+            </label>
             <div className="relative">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">$</span>
               <Input
-                type="number"
-                min="0.01"
-                step="0.01"
-                placeholder="0.00"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                className="pl-7"
-                data-testid="input-credit-amount"
+                type="number" min="0.01" step="0.01" placeholder="0.00"
+                value={amount} onChange={(e) => setAmount(e.target.value)}
+                className="pl-7" data-testid="input-balance-amount"
               />
             </div>
           </div>
           <div>
             <label className="text-sm font-medium text-foreground block mb-1.5">Description (optional)</label>
             <Input
-              placeholder="e.g. Binance Pay top-up"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              data-testid="input-credit-description"
+              placeholder={mode === "credit" ? "e.g. Binance Pay top-up" : "e.g. Refund adjustment"}
+              value={description} onChange={(e) => setDescription(e.target.value)}
+              data-testid="input-balance-description"
             />
           </div>
           <div className="flex gap-2 pt-1">
-            <Button variant="outline" onClick={onClose} className="flex-1" disabled={credit.isPending}>
-              Cancel
-            </Button>
+            <Button variant="outline" onClick={onClose} className="flex-1" disabled={mutation.isPending}>Cancel</Button>
             <Button
-              className="flex-1"
-              disabled={!amount || parseFloat(amount) <= 0 || credit.isPending}
-              onClick={() => credit.mutate()}
-              data-testid="button-submit-credit"
+              className={`flex-1 ${mode === "debit" ? "bg-red-600 hover:bg-red-700 text-white" : ""}`}
+              disabled={!amount || parseFloat(amount) <= 0 || mutation.isPending}
+              onClick={() => mutation.mutate()}
+              data-testid="button-submit-balance"
             >
-              {credit.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-              Add Balance
+              {mutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+              {mode === "credit" ? "Add Balance" : "Reduce Balance"}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function CustomerOrdersDialog({ customer, onClose }: { customer: Customer | null; onClose: () => void }) {
+  const { data, isLoading } = useQuery<{ success: boolean; data: CustomerOrder[] }>({
+    queryKey: ["/api/admin/customers", customer?.id, "orders"],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/customers/${customer!.id}/orders`, { credentials: "include" });
+      return res.json();
+    },
+    enabled: !!customer,
+  });
+  const customerOrders = data?.data ?? [];
+
+  return (
+    <Dialog open={!!customer} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="sm:max-w-lg max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Purchase History</DialogTitle>
+        </DialogHeader>
+        <div className="text-sm text-muted-foreground mb-3">{customer?.name} · {customer?.email}</div>
+        {isLoading ? (
+          <div className="flex items-center justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>
+        ) : customerOrders.length === 0 ? (
+          <div className="text-center py-8 text-sm text-muted-foreground">No purchases yet</div>
+        ) : (
+          <div className="space-y-3">
+            {customerOrders.map((o) => (
+              <div key={o.id} className="rounded-lg border border-border bg-muted/20 p-3">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="font-medium text-sm text-foreground">{o.subscription}</span>
+                  <span className="font-bold text-sm">${(o.amountCents / 100).toFixed(2)}</span>
+                </div>
+                <div className="text-xs text-muted-foreground mb-2">
+                  #{o.orderNumber} · {o.quantity} key{o.quantity !== 1 ? "s" : ""} · {new Date(o.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+                </div>
+                {o.keys?.length > 0 && (
+                  <div className="space-y-1">
+                    {o.keys.map((k, i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <code className="text-xs font-mono bg-background border border-border rounded px-2 py-0.5 flex-1 truncate" data-testid={`text-order-key-${o.id}-${i}`}>{k}</code>
+                        <CopyBtn text={k} />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DeleteCustomerDialog({ customer, onClose }: { customer: Customer | null; onClose: () => void }) {
+  const { toast } = useToast();
+  const del = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("DELETE", `/api/admin/customers/${customer!.id}`, {});
+      return res.json();
+    },
+    onSuccess: (data) => {
+      if (data.success) {
+        toast({ title: "Customer deleted" });
+        queryClient.invalidateQueries({ queryKey: ["/api/admin/customers"] });
+        onClose();
+      } else {
+        toast({ title: "Failed", description: data.message, variant: "destructive" });
+      }
+    },
+    onError: () => toast({ title: "Error", description: "Could not delete customer.", variant: "destructive" }),
+  });
+
+  return (
+    <Dialog open={!!customer} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-red-500"><AlertTriangle className="w-4 h-4" /> Delete Customer</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 pt-1">
+          <p className="text-sm text-muted-foreground">
+            This will permanently delete <span className="font-medium text-foreground">{customer?.email}</span> and all their data. This cannot be undone.
+          </p>
+          <div className="flex gap-2">
+            <Button variant="outline" className="flex-1" onClick={onClose} disabled={del.isPending}>Cancel</Button>
+            <Button
+              className="flex-1 bg-red-600 hover:bg-red-700 text-white"
+              onClick={() => del.mutate()}
+              disabled={del.isPending}
+              data-testid="button-confirm-delete-customer"
+            >
+              {del.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+              Delete
             </Button>
           </div>
         </div>
@@ -627,7 +728,10 @@ export default function AdminPage() {
   const [, navigate] = useLocation();
   const { user, isAdmin, isLoading } = useAuth();
   const [tab, setTab] = useState<"customers" | "orders" | "deposits" | "inventory" | "settings">("customers");
-  const [creditTarget, setCreditTarget] = useState<Customer | null>(null);
+  const [balanceTarget, setBalanceTarget] = useState<{ customer: Customer; mode: "credit" | "debit" } | null>(null);
+  const [ordersTarget, setOrdersTarget] = useState<Customer | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Customer | null>(null);
+  const [customerSearch, setCustomerSearch] = useState("");
 
   const { data: customersData, isLoading: customersLoading } = useQuery<{ success: boolean; data: Customer[] }>({
     queryKey: ["/api/admin/customers"],
@@ -657,10 +761,21 @@ export default function AdminPage() {
   const customers = customersData?.data ?? [];
   const orders = ordersData?.data ?? [];
   const totalBalance = customers.filter(c => c.role !== "admin").reduce((sum, c) => sum + c.balanceCents, 0);
+  const filteredCustomers = customers.filter(c => c.role !== "admin").filter(c => {
+    if (!customerSearch.trim()) return true;
+    const q = customerSearch.toLowerCase();
+    return c.name.toLowerCase().includes(q) || c.email.toLowerCase().includes(q);
+  });
 
   return (
     <PageLayout maxWidth="max-w-5xl">
-      <CreditDialog customer={creditTarget} onClose={() => setCreditTarget(null)} />
+      <BalanceDialog
+        customer={balanceTarget?.customer ?? null}
+        mode={balanceTarget?.mode ?? "credit"}
+        onClose={() => setBalanceTarget(null)}
+      />
+      <CustomerOrdersDialog customer={ordersTarget} onClose={() => setOrdersTarget(null)} />
+      <DeleteCustomerDialog customer={deleteTarget} onClose={() => setDeleteTarget(null)} />
 
       <div className="mb-6 sm:mb-8">
         <h1 className="text-2xl sm:text-3xl font-bold text-foreground mb-1">Admin Panel</h1>
@@ -722,48 +837,84 @@ export default function AdminPage() {
       {/* Customers tab */}
       {tab === "customers" && (
         <div>
+          {/* Search */}
+          <div className="relative mb-4">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input
+              placeholder="Search by name or email…"
+              value={customerSearch}
+              onChange={(e) => setCustomerSearch(e.target.value)}
+              className="pl-9"
+              data-testid="input-customer-search"
+            />
+          </div>
+
           {customersLoading ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
             </div>
-          ) : customers.filter(c => c.role !== "admin").length === 0 ? (
+          ) : filteredCustomers.length === 0 ? (
             <Card className="border border-card-border">
               <CardContent className="p-8 text-center">
                 <Users className="w-10 h-10 text-muted-foreground/40 mx-auto mb-3" />
-                <p className="text-sm text-muted-foreground">No customers yet</p>
+                <p className="text-sm text-muted-foreground">{customerSearch ? "No customers match your search" : "No customers yet"}</p>
               </CardContent>
             </Card>
           ) : (
             <div className="space-y-2">
-              {customers.filter(c => c.role !== "admin").map((c) => (
+              {filteredCustomers.map((c) => (
                 <Card key={c.id} className="border border-card-border" data-testid={`row-customer-${c.id}`}>
                   <CardContent className="p-4">
                     <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-semibold text-foreground text-sm truncate">{c.name}</span>
-                        </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-semibold text-foreground text-sm">{c.name}</div>
                         <div className="text-xs text-muted-foreground truncate">{c.email}</div>
                         <div className="text-xs text-muted-foreground mt-0.5">
                           Joined {new Date(c.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
                         </div>
                       </div>
-                      <div className="flex items-center gap-3 shrink-0">
-                        <div className="text-right">
+                      <div className="flex items-center gap-2 shrink-0">
+                        <div className="text-right mr-1">
                           <div className="text-base font-bold text-foreground" data-testid={`text-balance-${c.id}`}>
                             ${(c.balanceCents / 100).toFixed(2)}
                           </div>
                           <div className="text-xs text-muted-foreground">balance</div>
                         </div>
                         <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => setCreditTarget(c)}
-                          className="gap-1.5"
+                          size="sm" variant="outline"
+                          onClick={() => setOrdersTarget(c)}
+                          className="gap-1 h-8 px-2.5 text-xs"
+                          title="View purchase history"
+                          data-testid={`button-view-orders-${c.id}`}
+                        >
+                          <ShoppingBag className="w-3.5 h-3.5" />
+                        </Button>
+                        <Button
+                          size="sm" variant="outline"
+                          onClick={() => setBalanceTarget({ customer: c, mode: "credit" })}
+                          className="gap-1 h-8 px-2.5 text-xs text-green-600 border-green-500/30 hover:bg-green-500/10"
+                          title="Add balance"
                           data-testid={`button-add-balance-${c.id}`}
                         >
                           <Plus className="w-3.5 h-3.5" />
-                          Add
+                        </Button>
+                        <Button
+                          size="sm" variant="outline"
+                          onClick={() => setBalanceTarget({ customer: c, mode: "debit" })}
+                          className="gap-1 h-8 px-2.5 text-xs text-amber-600 border-amber-500/30 hover:bg-amber-500/10"
+                          title="Reduce balance"
+                          data-testid={`button-reduce-balance-${c.id}`}
+                        >
+                          <Minus className="w-3.5 h-3.5" />
+                        </Button>
+                        <Button
+                          size="sm" variant="outline"
+                          onClick={() => setDeleteTarget(c)}
+                          className="gap-1 h-8 px-2.5 text-xs text-red-500 border-red-500/30 hover:bg-red-500/10"
+                          title="Delete customer"
+                          data-testid={`button-delete-customer-${c.id}`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
                         </Button>
                       </div>
                     </div>

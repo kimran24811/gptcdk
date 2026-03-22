@@ -547,6 +547,70 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  app.post("/api/admin/customers/:id/debit", requireAdmin, async (req, res) => {
+    const customerId = parseInt(req.params.id, 10);
+    const { amountUsd, description } = req.body;
+    if (!amountUsd || isNaN(parseFloat(amountUsd)) || parseFloat(amountUsd) <= 0) {
+      return res.json({ success: false, message: "Valid amount in USD is required." });
+    }
+    const amountCents = Math.round(parseFloat(amountUsd) * 100);
+    const desc = description?.trim() || `Manual deduction by admin`;
+    try {
+      const [user] = await db.select().from(users).where(eq(users.id, customerId));
+      if (!user) return res.json({ success: false, message: "Customer not found." });
+      if (user.balanceCents < amountCents) {
+        return res.json({ success: false, message: "Insufficient balance. Cannot reduce below zero." });
+      }
+      const newBalance = user.balanceCents - amountCents;
+      await db.update(users).set({ balanceCents: newBalance }).where(eq(users.id, customerId));
+      await db.insert(transactions).values({
+        userId: customerId, amountCents: -amountCents, type: "debit", description: desc, createdBy: req.session.userId!,
+      });
+      return res.json({ success: true, balanceCents: newBalance });
+    } catch (err) {
+      console.error("Debit error:", err);
+      return res.status(500).json({ success: false, message: "Could not reduce balance." });
+    }
+  });
+
+  app.delete("/api/admin/customers/:id", requireAdmin, async (req, res) => {
+    const customerId = parseInt(req.params.id, 10);
+    try {
+      const [user] = await db.select().from(users).where(eq(users.id, customerId));
+      if (!user) return res.json({ success: false, message: "Customer not found." });
+      if (user.role === "admin") return res.json({ success: false, message: "Cannot delete admin account." });
+      await db.delete(transactions).where(eq(transactions.userId, customerId));
+      await db.delete(depositRequests).where(eq(depositRequests.userId, customerId));
+      await db.update(inventoryKeys).set({ soldTo: null, soldAt: null, status: "available" }).where(eq(inventoryKeys.soldTo, customerId));
+      await db.delete(orders).where(eq(orders.userId, customerId));
+      await db.delete(users).where(eq(users.id, customerId));
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("Delete customer error:", err);
+      return res.status(500).json({ success: false, message: "Could not delete customer." });
+    }
+  });
+
+  app.get("/api/admin/customers/:id/orders", requireAdmin, async (req, res) => {
+    const customerId = parseInt(req.params.id, 10);
+    try {
+      const customerOrders = await db.select({
+        id: orders.id,
+        orderNumber: orders.orderNumber,
+        subscription: orders.subscription,
+        quantity: orders.quantity,
+        amountCents: orders.amountCents,
+        keys: orders.keys,
+        status: orders.status,
+        createdAt: orders.createdAt,
+      }).from(orders).where(eq(orders.userId, customerId)).orderBy(desc(orders.createdAt));
+      return res.json({ success: true, data: customerOrders });
+    } catch (err) {
+      console.error("Customer orders error:", err);
+      return res.status(500).json({ success: false, message: "Could not fetch orders." });
+    }
+  });
+
   app.get("/api/admin/orders", requireAdmin, async (_req, res) => {
     try {
       const allOrders = await db
