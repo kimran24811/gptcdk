@@ -95,6 +95,38 @@ const PLAN_SLUG_MAP: Record<string, { product_slug: string; subscription_type_sl
   "pro-1m":   { product_slug: "chatgpt", subscription_type_slug: "pro-1m",   name: "ChatGPT Pro 1 Month" },
 };
 
+// ── Custom customer-facing prices (what customers are charged) ───────────────
+// These are the prices shown to customers in the shop. Keys.ovh charges less
+// internally — the difference is the admin's margin. Always bill using these.
+interface CustomVolumeTier { minQty: number; price: number; }
+interface CustomPlanPrice {
+  basePrice: number;
+  volumeTiers: CustomVolumeTier[]; // sorted desc by minQty
+}
+const CUSTOM_PLAN_PRICES: Record<string, CustomPlanPrice> = {
+  "plus-1m": {
+    basePrice: 2.38,
+    volumeTiers: [
+      { minQty: 100, price: 1.55 },
+      { minQty: 50,  price: 1.75 },
+      { minQty: 30,  price: 1.95 },
+      { minQty: 10,  price: 2.15 },
+    ],
+  },
+  "plus-1y": { basePrice: 28,  volumeTiers: [] },
+  "go-1y":   { basePrice: 5,   volumeTiers: [] },
+  "pro-1m":  { basePrice: 110, volumeTiers: [] },
+};
+
+function resolveCustomPrice(planId: string, quantity: number): number {
+  const custom = CUSTOM_PLAN_PRICES[planId];
+  if (!custom) return 0;
+  for (const tier of custom.volumeTiers) {
+    if (quantity >= tier.minQty) return tier.price;
+  }
+  return custom.basePrice;
+}
+
 // ── Cached plan pricing (populated from keys.ovh, used for inventory orders) ─
 interface VolumeTier { min_qty: number; price: number; }
 interface PlanPriceInfo {
@@ -278,9 +310,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           ? [...subType.volume_prices].sort((a: VolumeTier, b: VolumeTier) => b.min_qty - a.min_qty)
           : [];
         planPriceCache[planId] = { basePrice: subType.price, volumePrices, productName: product.name ?? planSlug.name, subscriptionName: subType.name ?? planSlug.name, cachedAt: Date.now() };
-        let unitPrice = subType.price;
-        const tier = volumePrices.find((t) => quantity >= t.min_qty);
-        if (tier) unitPrice = tier.price;
+        const unitPrice = resolveCustomPrice(planId, quantity);
         const tc = Math.round(unitPrice * quantity * 100);
         if (user.balanceCents < tc) return null; // insufficient — caller handles
         const purchaseData = await apiCall("POST", "/purchase", {
@@ -328,7 +358,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           }
         }
 
-        const unitPrice = resolvePlanPrice(pricing, quantity);
+        const unitPrice = resolveCustomPrice(planId, quantity);
         totalCents = Math.round(unitPrice * quantity * 100);
 
         if (user.balanceCents < totalCents) {
@@ -340,7 +370,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           });
         }
 
-        console.log(`[purchase] user=${user.id} plan=${planId} qty=${quantity} total=$${(totalCents/100).toFixed(2)} source=inventory`);
+        console.log(`[purchase] user=${user.id} plan=${planId} qty=${quantity} unitPrice=$${unitPrice} total=$${(totalCents/100).toFixed(2)} source=inventory`);
 
         // Atomically allocate exactly `quantity` available keys — FOR UPDATE SKIP LOCKED
         // prevents concurrent purchases from double-selling the same keys.
@@ -415,12 +445,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           cachedAt: Date.now(),
         };
 
-        // Apply volume pricing
-        let unitPrice = subType.price;
-        const tier = volumePricesOvh.find((t) => quantity >= t.min_qty);
-        if (tier) unitPrice = tier.price;
-
-        totalCents = Math.round(unitPrice * quantity * 100);
+        // Always charge the custom price — not the keys.ovh wholesale price
+        const customUnitPrice = resolveCustomPrice(planId, quantity);
+        totalCents = Math.round(customUnitPrice * quantity * 100);
 
         if (user.balanceCents < totalCents) {
           const shortfall = ((totalCents - user.balanceCents) / 100).toFixed(2);
@@ -431,7 +458,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           });
         }
 
-        console.log(`[purchase] user=${user.id} plan=${planId} qty=${quantity} total=$${(totalCents/100).toFixed(2)} source=keys.ovh`);
+        console.log(`[purchase] user=${user.id} plan=${planId} qty=${quantity} unitPrice=$${customUnitPrice} total=$${(totalCents/100).toFixed(2)} source=keys.ovh`);
 
         const purchaseData = await apiCall("POST", "/purchase", {
           product_slug: planSlug.product_slug,
