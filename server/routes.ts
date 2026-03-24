@@ -1200,6 +1200,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  app.get("/api/admin/inventory/search", requireAdmin, async (req, res) => {
+    const keyVal = (req.query.key as string ?? "").trim();
+    if (!keyVal) return res.json({ success: false, message: "Key is required." });
+    try {
+      const rows = await db.select({
+        id: inventoryKeys.id,
+        plan: inventoryKeys.plan,
+        key: inventoryKeys.key,
+        status: inventoryKeys.status,
+        addedBy: inventoryKeys.addedBy,
+        soldTo: inventoryKeys.soldTo,
+        soldToEmail: users.email,
+        soldToName: users.name,
+        soldAt: inventoryKeys.soldAt,
+        deletedAt: inventoryKeys.deletedAt,
+        createdAt: inventoryKeys.createdAt,
+      }).from(inventoryKeys)
+        .leftJoin(users, eq(inventoryKeys.soldTo, users.id))
+        .where(sql`LOWER(${inventoryKeys.key}) = LOWER(${keyVal})`);
+      if (rows.length === 0) return res.json({ success: false, message: "Key not found in inventory." });
+      return res.json({ success: true, key: rows[0] });
+    } catch (err) {
+      console.error("Key search error:", err);
+      return res.status(500).json({ success: false, message: "Search failed." });
+    }
+  });
+
   app.get("/api/admin/inventory/deleted", requireAdmin, async (req, res) => {
     try {
       const keys = await db.select({

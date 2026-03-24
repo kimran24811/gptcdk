@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, Users, Package, DollarSign, Plus, Copy, Check, Settings, ArrowDownToLine, Key, Trash2, Search, Minus, ShoppingBag, AlertTriangle, RotateCcw, Archive } from "lucide-react";
+import { Loader2, Users, Package, DollarSign, Plus, Copy, Check, Settings, ArrowDownToLine, Key, Trash2, Search, Minus, ShoppingBag, AlertTriangle, RotateCcw, Archive, CalendarDays, User, Tag, Clock } from "lucide-react";
 
 const BINANCE_PAY_ID = "552780449";
 const BINANCE_USERNAME = "User-1d9f7";
@@ -521,6 +521,20 @@ interface DeletedKey {
   createdAt: string;
 }
 
+interface KeySearchResult {
+  id: number;
+  plan: string;
+  key: string;
+  status: string;
+  addedBy: number;
+  soldTo: number | null;
+  soldToEmail: string | null;
+  soldToName: string | null;
+  soldAt: string | null;
+  deletedAt: string | null;
+  createdAt: string;
+}
+
 function KeyInventoryTab() {
   const { toast } = useToast();
   const [selectedPlan, setSelectedPlan] = useState("plus-1m");
@@ -528,6 +542,9 @@ function KeyInventoryTab() {
   const [filterPlan, setFilterPlan] = useState("all");
   const [filterStatus, setFilterStatus] = useState("all");
   const [showTrash, setShowTrash] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResult, setSearchResult] = useState<null | { found: true; key: KeySearchResult } | { found: false; message: string }>(null);
 
   const { data, isLoading, refetch } = useQuery<{ success: boolean; data: InventoryKey[]; summary: InventorySummaryRow[] }>({
     queryKey: ["/api/admin/inventory", filterPlan, filterStatus],
@@ -625,6 +642,21 @@ function KeyInventoryTab() {
     onError: () => toast({ title: "Error", description: "Could not permanently delete key.", variant: "destructive" }),
   });
 
+  const searchKey = useMutation({
+    mutationFn: async (q: string) => {
+      const res = await fetch(`/api/admin/inventory/search?key=${encodeURIComponent(q)}`, { credentials: "include" });
+      return res.json();
+    },
+    onSuccess: (d) => {
+      if (d.success) {
+        setSearchResult({ found: true, key: d.key });
+      } else {
+        setSearchResult({ found: false, message: d.message || "Key not found." });
+      }
+    },
+    onError: () => setSearchResult({ found: false, message: "Search failed. Please try again." }),
+  });
+
   const lineCount = keysText.split("\n").filter((l) => l.trim()).length;
   const trashKeys = trashData?.keys ?? [];
 
@@ -683,6 +715,124 @@ function KeyInventoryTab() {
                 </div>
               </div>
             ))}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Key Search dialog */}
+      <Dialog open={showSearch} onOpenChange={(v) => { setShowSearch(v); if (!v) { setSearchQuery(""); setSearchResult(null); } }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Search className="w-4 h-4 text-muted-foreground" />
+              Key Lookup
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 pt-1">
+            <div className="flex gap-2">
+              <Input
+                placeholder="Paste or type the key…"
+                value={searchQuery}
+                onChange={(e) => { setSearchQuery(e.target.value); setSearchResult(null); }}
+                className="font-mono text-xs flex-1"
+                onKeyDown={(e) => { if (e.key === "Enter" && searchQuery.trim()) searchKey.mutate(searchQuery.trim()); }}
+                data-testid="input-key-search"
+                autoFocus
+              />
+              <Button
+                onClick={() => searchKey.mutate(searchQuery.trim())}
+                disabled={!searchQuery.trim() || searchKey.isPending}
+                data-testid="button-key-search"
+              >
+                {searchKey.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+              </Button>
+            </div>
+
+            {searchResult && !searchResult.found && (
+              <div className="flex items-center gap-2 text-sm text-destructive bg-destructive/5 border border-destructive/20 rounded-lg px-3 py-2.5">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                {searchResult.message}
+              </div>
+            )}
+
+            {searchResult && searchResult.found && (() => {
+              const k = searchResult.key;
+              const statusColor =
+                k.status === "available" ? "bg-green-500/10 text-green-600 dark:text-green-400 border-green-500/20" :
+                k.status === "sold" ? "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20" :
+                "bg-red-500/10 text-red-500 border-red-500/20";
+              return (
+                <div className="rounded-xl border border-border bg-muted/20 p-4 space-y-3">
+                  {/* Key value */}
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-1 font-medium uppercase tracking-wide">Key</p>
+                    <div className="flex items-center gap-2">
+                      <code className="font-mono text-sm text-foreground flex-1 break-all">{k.key}</code>
+                    </div>
+                  </div>
+
+                  <div className="border-t border-border" />
+
+                  {/* Status + Plan */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-1 font-medium uppercase tracking-wide flex items-center gap-1"><Tag className="w-3 h-3" />Status</p>
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold border ${statusColor}`}>
+                        {k.status.charAt(0).toUpperCase() + k.status.slice(1)}
+                      </span>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-1 font-medium uppercase tracking-wide flex items-center gap-1"><Key className="w-3 h-3" />Plan</p>
+                      <p className="text-sm font-medium text-foreground">{PLAN_LABELS[k.plan] ?? k.plan}</p>
+                    </div>
+                  </div>
+
+                  <div className="border-t border-border" />
+
+                  {/* Timestamps */}
+                  <div className="space-y-2">
+                    <div className="flex items-start gap-2">
+                      <CalendarDays className="w-3.5 h-3.5 text-muted-foreground mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-xs text-muted-foreground">Added to inventory</p>
+                        <p className="text-sm text-foreground font-medium">{new Date(k.createdAt).toLocaleString()}</p>
+                      </div>
+                    </div>
+
+                    {k.soldAt && (
+                      <div className="flex items-start gap-2">
+                        <Clock className="w-3.5 h-3.5 text-muted-foreground mt-0.5 shrink-0" />
+                        <div>
+                          <p className="text-xs text-muted-foreground">Sold at</p>
+                          <p className="text-sm text-foreground font-medium">{new Date(k.soldAt).toLocaleString()}</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {(k.soldToName || k.soldToEmail) && (
+                      <div className="flex items-start gap-2">
+                        <User className="w-3.5 h-3.5 text-muted-foreground mt-0.5 shrink-0" />
+                        <div>
+                          <p className="text-xs text-muted-foreground">Sold to</p>
+                          {k.soldToName && <p className="text-sm text-foreground font-medium">{k.soldToName}</p>}
+                          {k.soldToEmail && <p className="text-xs text-muted-foreground">{k.soldToEmail}</p>}
+                        </div>
+                      </div>
+                    )}
+
+                    {k.deletedAt && (
+                      <div className="flex items-start gap-2">
+                        <Trash2 className="w-3.5 h-3.5 text-muted-foreground mt-0.5 shrink-0" />
+                        <div>
+                          <p className="text-xs text-muted-foreground">Deleted at</p>
+                          <p className="text-sm text-foreground font-medium">{new Date(k.deletedAt).toLocaleString()}</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </DialogContent>
       </Dialog>
@@ -752,6 +902,16 @@ function KeyInventoryTab() {
       <div>
         <div className="flex items-center gap-2 mb-3 flex-wrap">
           <h3 className="text-sm font-semibold text-foreground flex-1">Key List</h3>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => { setShowSearch(true); setSearchResult(null); setSearchQuery(""); }}
+            className="gap-1.5 h-8 text-xs text-muted-foreground"
+            data-testid="button-open-key-search"
+          >
+            <Search className="w-3.5 h-3.5" />
+            Search Key
+          </Button>
           <Button
             variant="outline"
             size="sm"
