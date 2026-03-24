@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, Users, Package, DollarSign, Plus, Copy, Check, Settings, ArrowDownToLine, Key, Trash2, Search, Minus, ShoppingBag, AlertTriangle } from "lucide-react";
+import { Loader2, Users, Package, DollarSign, Plus, Copy, Check, Settings, ArrowDownToLine, Key, Trash2, Search, Minus, ShoppingBag, AlertTriangle, RotateCcw, Archive } from "lucide-react";
 
 const BINANCE_PAY_ID = "552780449";
 const BINANCE_USERNAME = "User-1d9f7";
@@ -513,12 +513,21 @@ interface InventoryKey {
 
 interface InventorySummaryRow { plan: string; status: string; cnt: string; }
 
+interface DeletedKey {
+  id: number;
+  plan: string;
+  key: string;
+  deletedAt: string | null;
+  createdAt: string;
+}
+
 function KeyInventoryTab() {
   const { toast } = useToast();
   const [selectedPlan, setSelectedPlan] = useState("plus-1m");
   const [keysText, setKeysText] = useState("");
   const [filterPlan, setFilterPlan] = useState("all");
   const [filterStatus, setFilterStatus] = useState("all");
+  const [showTrash, setShowTrash] = useState(false);
 
   const { data, isLoading, refetch } = useQuery<{ success: boolean; data: InventoryKey[]; summary: InventorySummaryRow[] }>({
     queryKey: ["/api/admin/inventory", filterPlan, filterStatus],
@@ -565,7 +574,7 @@ function KeyInventoryTab() {
     },
     onSuccess: (d) => {
       if (d.success) {
-        toast({ title: "Key deleted" });
+        toast({ title: "Key moved to trash" });
         refetch();
       } else {
         toast({ title: "Failed", description: d.message, variant: "destructive" });
@@ -574,10 +583,110 @@ function KeyInventoryTab() {
     onError: () => toast({ title: "Error", description: "Could not delete key.", variant: "destructive" }),
   });
 
+  const { data: trashData, isLoading: trashLoading, refetch: refetchTrash } = useQuery<{ success: boolean; keys: DeletedKey[] }>({
+    queryKey: ["/api/admin/inventory/deleted"],
+    queryFn: async () => {
+      const res = await fetch("/api/admin/inventory/deleted", { credentials: "include" });
+      return res.json();
+    },
+    enabled: showTrash,
+  });
+
+  const restoreKey = useMutation({
+    mutationFn: async (id: number) => {
+      const res = await apiRequest("POST", `/api/admin/inventory/${id}/restore`, {});
+      return res.json();
+    },
+    onSuccess: (d) => {
+      if (d.success) {
+        toast({ title: "Key restored" });
+        refetch();
+        refetchTrash();
+      } else {
+        toast({ title: "Failed", description: d.message, variant: "destructive" });
+      }
+    },
+    onError: () => toast({ title: "Error", description: "Could not restore key.", variant: "destructive" }),
+  });
+
+  const permanentDeleteKey = useMutation({
+    mutationFn: async (id: number) => {
+      const res = await apiRequest("DELETE", `/api/admin/inventory/${id}/permanent`, {});
+      return res.json();
+    },
+    onSuccess: (d) => {
+      if (d.success) {
+        toast({ title: "Key permanently deleted" });
+        refetchTrash();
+      } else {
+        toast({ title: "Failed", description: d.message, variant: "destructive" });
+      }
+    },
+    onError: () => toast({ title: "Error", description: "Could not permanently delete key.", variant: "destructive" }),
+  });
+
   const lineCount = keysText.split("\n").filter((l) => l.trim()).length;
+  const trashKeys = trashData?.keys ?? [];
 
   return (
     <div className="space-y-5">
+      {/* Trash / Deleted Keys dialog */}
+      <Dialog open={showTrash} onOpenChange={setShowTrash}>
+        <DialogContent className="sm:max-w-lg max-h-[80vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Archive className="w-4 h-4 text-muted-foreground" />
+              Deleted Keys
+            </DialogTitle>
+          </DialogHeader>
+          <div className="overflow-y-auto flex-1 space-y-2 pr-0.5">
+            {trashLoading ? (
+              <div className="flex items-center justify-center py-10"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>
+            ) : trashKeys.length === 0 ? (
+              <div className="text-center py-10">
+                <Archive className="w-10 h-10 text-muted-foreground/30 mx-auto mb-3" />
+                <p className="text-sm text-muted-foreground">Trash is empty</p>
+              </div>
+            ) : trashKeys.map((k) => (
+              <div key={k.id} className="flex items-center gap-2 p-3 rounded-lg border border-border bg-muted/20" data-testid={`trash-key-${k.id}`}>
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs text-muted-foreground mb-0.5">{PLAN_LABELS[k.plan] ?? k.plan}</div>
+                  <div className="font-mono text-xs text-foreground truncate">
+                    {k.key.length > 36 ? `${k.key.slice(0, 18)}…${k.key.slice(-10)}` : k.key}
+                  </div>
+                  {k.deletedAt && (
+                    <div className="text-xs text-muted-foreground mt-0.5">
+                      Deleted {new Date(k.deletedAt).toLocaleString()}
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    onClick={() => restoreKey.mutate(k.id)}
+                    disabled={restoreKey.isPending}
+                    title="Restore key"
+                    className="flex items-center gap-1 px-2 py-1 rounded border border-border bg-background text-muted-foreground hover:text-primary hover:border-primary/40 text-xs transition-all"
+                    data-testid={`button-restore-key-${k.id}`}
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    Restore
+                  </button>
+                  <button
+                    onClick={() => permanentDeleteKey.mutate(k.id)}
+                    disabled={permanentDeleteKey.isPending}
+                    title="Permanently delete"
+                    className="flex items-center gap-1 px-2 py-1 rounded border border-border bg-background text-muted-foreground hover:text-red-500 hover:border-red-500/40 text-xs transition-all"
+                    data-testid={`button-perm-delete-key-${k.id}`}
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Summary cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {Object.entries(PLAN_LABELS).map(([planId, label]) => {
@@ -643,6 +752,16 @@ function KeyInventoryTab() {
       <div>
         <div className="flex items-center gap-2 mb-3 flex-wrap">
           <h3 className="text-sm font-semibold text-foreground flex-1">Key List</h3>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowTrash(true)}
+            className="gap-1.5 h-8 text-xs text-muted-foreground"
+            data-testid="button-view-trash"
+          >
+            <Archive className="w-3.5 h-3.5" />
+            Deleted Keys
+          </Button>
           <Select value={filterPlan} onValueChange={setFilterPlan}>
             <SelectTrigger className="w-40 h-8 text-xs" data-testid="select-filter-plan">
               <SelectValue placeholder="All plans" />

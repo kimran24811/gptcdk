@@ -65,6 +65,7 @@ export const inventoryKeys = pgTable("inventory_keys", {
   addedBy: integer("added_by").notNull().references(() => users.id),
   soldTo: integer("sold_to").references(() => users.id),
   soldAt: timestamp("sold_at"),
+  deletedAt: timestamp("deleted_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (table) => ({
   planStatusIdx: index("idx_inventory_keys_plan_status").on(table.plan, table.status),

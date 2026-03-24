@@ -1190,11 +1190,61 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const [key] = await db.select().from(inventoryKeys).where(eq(inventoryKeys.id, keyId));
       if (!key) return res.json({ success: false, message: "Key not found." });
       if (key.status !== "available") return res.json({ success: false, message: "Only unsold keys can be deleted." });
-      await db.delete(inventoryKeys).where(eq(inventoryKeys.id, keyId));
+      await db.update(inventoryKeys)
+        .set({ status: "deleted", deletedAt: new Date() })
+        .where(eq(inventoryKeys.id, keyId));
       return res.json({ success: true });
     } catch (err) {
       console.error("Inventory delete error:", err);
       return res.status(500).json({ success: false, message: "Could not delete key." });
+    }
+  });
+
+  app.get("/api/admin/inventory/deleted", requireAdmin, async (req, res) => {
+    try {
+      const keys = await db.select({
+        id: inventoryKeys.id,
+        plan: inventoryKeys.plan,
+        key: inventoryKeys.key,
+        deletedAt: inventoryKeys.deletedAt,
+        createdAt: inventoryKeys.createdAt,
+      }).from(inventoryKeys)
+        .where(eq(inventoryKeys.status, "deleted"))
+        .orderBy(desc(inventoryKeys.deletedAt));
+      return res.json({ success: true, keys });
+    } catch (err) {
+      console.error("Inventory deleted list error:", err);
+      return res.status(500).json({ success: false, message: "Could not fetch deleted keys." });
+    }
+  });
+
+  app.post("/api/admin/inventory/:id/restore", requireAdmin, async (req, res) => {
+    const keyId = parseInt(req.params.id, 10);
+    try {
+      const [key] = await db.select().from(inventoryKeys).where(eq(inventoryKeys.id, keyId));
+      if (!key) return res.json({ success: false, message: "Key not found." });
+      if (key.status !== "deleted") return res.json({ success: false, message: "Key is not deleted." });
+      await db.update(inventoryKeys)
+        .set({ status: "available", deletedAt: null })
+        .where(eq(inventoryKeys.id, keyId));
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("Inventory restore error:", err);
+      return res.status(500).json({ success: false, message: "Could not restore key." });
+    }
+  });
+
+  app.delete("/api/admin/inventory/:id/permanent", requireAdmin, async (req, res) => {
+    const keyId = parseInt(req.params.id, 10);
+    try {
+      const [key] = await db.select().from(inventoryKeys).where(eq(inventoryKeys.id, keyId));
+      if (!key) return res.json({ success: false, message: "Key not found." });
+      if (key.status !== "deleted") return res.json({ success: false, message: "Key must be in trash first." });
+      await db.delete(inventoryKeys).where(eq(inventoryKeys.id, keyId));
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("Inventory permanent delete error:", err);
+      return res.status(500).json({ success: false, message: "Could not permanently delete key." });
     }
   });
 
