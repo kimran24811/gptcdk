@@ -1224,9 +1224,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const keyData = data.data;
       if (keyData.status === "available") {
         return res.json({ valid: true, type: keyData.subscription || "Plus CDK", status: keyData.status });
-      } else if (keyData.status === "used") {
-        const activatedFor = keyData.activated_for ?? keyData.used_by ?? keyData.email ?? null;
-        const activatedAt = keyData.activated_at ?? keyData.used_at ?? null;
+      } else if (keyData.status === "used" || keyData.status === "activated") {
+        const activatedFor = keyData.activated_for ?? keyData.used_by ?? keyData.email ?? keyData.activated_email ?? null;
+        const activatedAt = keyData.activated_at ?? keyData.used_at ?? keyData.activatedAt ?? null;
         return res.json({
           valid: false,
           status: "used",
