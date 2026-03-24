@@ -1410,6 +1410,59 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // ── Nitro Auto-Activate (receipt-api.nitro.xin) ──────────────────────────
+  app.post("/api/activate-nitro", async (req, res) => {
+    const { cdkKey, sessionData } = req.body;
+    if (!cdkKey || !sessionData) {
+      return res.json({ success: false, message: "CDK key and session data are required." });
+    }
+    try {
+      const resp = await fetch("https://receipt-api.nitro.xin/stocks/public/outstock", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Device-Id": "web",
+        },
+        body: JSON.stringify({ cdk: cdkKey.trim(), user: sessionData.trim() }),
+      });
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => "");
+        console.error("[nitro] outstock error:", resp.status, errText);
+        return res.json({ success: false, message: errText || `Activation service returned error ${resp.status}.` });
+      }
+      const contentType = resp.headers.get("content-type") || "";
+      let taskId: string;
+      if (contentType.includes("application/json")) {
+        const json = await resp.json();
+        taskId = typeof json === "string" ? json : String(json);
+      } else {
+        taskId = (await resp.text()).trim();
+      }
+      if (!taskId) {
+        return res.json({ success: false, message: "Activation service did not return a task ID." });
+      }
+      return res.json({ success: true, taskId });
+    } catch (err) {
+      console.error("[nitro] activate error:", err);
+      return res.json({ success: false, message: "Could not reach the activation service. Please try again." });
+    }
+  });
+
+  app.get("/api/activate-nitro/:taskId", async (req, res) => {
+    const { taskId } = req.params;
+    try {
+      const resp = await fetch(`https://receipt-api.nitro.xin/stocks/public/outstock/${encodeURIComponent(taskId)}`);
+      if (!resp.ok) {
+        return res.json({ pending: true, success: false, message: `Poll error ${resp.status}.` });
+      }
+      const data = await resp.json();
+      return res.json(data);
+    } catch (err) {
+      console.error("[nitro] poll error:", err);
+      return res.json({ pending: true, success: false, message: "Polling failed, retrying..." });
+    }
+  });
+
   app.post("/api/batch-status", async (req, res) => {
     const { keys } = req.body;
     if (!Array.isArray(keys) || keys.length === 0) {
