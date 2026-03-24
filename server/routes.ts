@@ -1225,9 +1225,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (keyData.status === "available") {
         return res.json({ valid: true, type: keyData.subscription || "Plus CDK", status: keyData.status });
       } else if (keyData.status === "used") {
-        return res.json({ valid: false, message: "This key has already been activated." });
+        const activatedFor = keyData.activated_for ?? keyData.used_by ?? keyData.email ?? null;
+        const activatedAt = keyData.activated_at ?? keyData.used_at ?? null;
+        return res.json({
+          valid: false,
+          status: "used",
+          message: "This key has already been activated.",
+          activatedFor,
+          activatedAt,
+        });
       } else if (keyData.status === "expired") {
-        return res.json({ valid: false, message: "This key has expired." });
+        return res.json({ valid: false, status: "expired", message: "This key has expired." });
       }
       return res.json({ valid: false, message: "Key is not available for activation." });
     } catch (err) {

@@ -10,7 +10,7 @@ import { Dialog, DialogContentRaw } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import {
   CheckCircle, ExternalLink, Zap, AlertTriangle,
-  Loader2, Check, Mail, RotateCcw,
+  Loader2, Check, Mail, RotateCcw, XCircle, Clock,
 } from "lucide-react";
 import { PageLayout } from "@/components/page-layout";
 
@@ -66,6 +66,7 @@ export default function RedeemPage() {
   const [sessionValidated, setSessionValidated] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [activationResult, setActivationResult] = useState<ActivationResult | null>(null);
+  const [usedKeyInfo, setUsedKeyInfo] = useState<{ activatedFor: string | null; activatedAt: string | null } | null>(null);
 
   // Read ?key= from URL and auto-validate on mount
   useEffect(() => {
@@ -88,9 +89,13 @@ export default function RedeemPage() {
     },
     onSuccess: (data) => {
       if (data.valid) {
+        setUsedKeyInfo(null);
         setCdkInfo({ type: data.type });
         setStep(2);
+      } else if (data.status === "used") {
+        setUsedKeyInfo({ activatedFor: data.activatedFor ?? null, activatedAt: data.activatedAt ?? null });
       } else {
+        setUsedKeyInfo(null);
         toast({
           title: "Invalid CDK",
           description: data.message || "The key you entered is not valid.",
@@ -99,6 +104,7 @@ export default function RedeemPage() {
       }
     },
     onError: () => {
+      setUsedKeyInfo(null);
       toast({
         title: "Validation failed",
         description: "Could not reach the validation service. Please try again.",
@@ -164,6 +170,7 @@ export default function RedeemPage() {
     setSessionValidated(false);
     setSessionError(null);
     setActivationResult(null);
+    setUsedKeyInfo(null);
     // Clear key from URL without reload
     const url = new URL(window.location.href);
     url.searchParams.delete("key");
@@ -231,9 +238,9 @@ export default function RedeemPage() {
                 <Input
                   placeholder="Enter your CDK key"
                   value={cdkKey}
-                  onChange={(e) => setCdkKey(e.target.value)}
+                  onChange={(e) => { setCdkKey(e.target.value); setUsedKeyInfo(null); }}
                   disabled={step > 1 || validateCdk.isPending}
-                  className={`flex-1 font-mono text-sm ${step > 1 ? "border-primary bg-primary/5" : ""}`}
+                  className={`flex-1 font-mono text-sm ${step > 1 ? "border-primary bg-primary/5" : usedKeyInfo ? "border-destructive" : ""}`}
                   data-testid="input-cdk-key"
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && cdkKey.trim() && step === 1) {
@@ -253,6 +260,31 @@ export default function RedeemPage() {
                   )}
                 </Button>
               </div>
+
+              {/* Key Already Used inline status */}
+              {usedKeyInfo && (
+                <div className="mt-3 space-y-1.5" data-testid="used-key-status">
+                  <div className="flex items-center gap-1.5">
+                    <XCircle className="w-4 h-4 text-destructive shrink-0" />
+                    <span className="text-sm font-semibold text-destructive">Key Already Used</span>
+                  </div>
+                  {usedKeyInfo.activatedFor && (
+                    <p className="text-xs text-muted-foreground pl-5" data-testid="used-key-email">
+                      Activated for: <span className="font-medium text-foreground">{usedKeyInfo.activatedFor}</span>
+                    </p>
+                  )}
+                  {usedKeyInfo.activatedAt && (
+                    <p className="text-xs text-muted-foreground pl-5 flex items-center gap-1" data-testid="used-key-time">
+                      <Clock className="w-3 h-3 shrink-0" />
+                      Activated at: <span className="font-medium text-foreground">{new Date(usedKeyInfo.activatedAt).toLocaleString()}</span>
+                    </p>
+                  )}
+                  {!usedKeyInfo.activatedFor && !usedKeyInfo.activatedAt && (
+                    <p className="text-xs text-muted-foreground pl-5">This key has already been activated.</p>
+                  )}
+                </div>
+              )}
+
               {step > 1 && cdkInfo && (
                 <div className="flex items-center gap-2 mt-3 flex-wrap" data-testid="cdk-valid-status">
                   <Badge variant="default" className="gap-1">
