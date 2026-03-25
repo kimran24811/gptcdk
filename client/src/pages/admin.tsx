@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, Users, Package, DollarSign, Plus, Copy, Check, Settings, ArrowDownToLine, Key, Trash2, Search, Minus, ShoppingBag, AlertTriangle, RotateCcw, Archive, CalendarDays, User, Tag, Clock } from "lucide-react";
+import { Loader2, Users, Package, DollarSign, Plus, Copy, Check, Settings, ArrowDownToLine, Key, Trash2, Search, Minus, ShoppingBag, AlertTriangle, RotateCcw, Archive, CalendarDays, User, Tag, Clock, ArrowUpCircle, ArrowDownCircle, Wallet, CreditCard, ChevronDown, ChevronUp } from "lucide-react";
 
 const BINANCE_PAY_ID = "552780449";
 const BINANCE_USERNAME = "User-1d9f7";
@@ -81,17 +81,6 @@ interface AdminDeposit {
   userId: number;
   userEmail: string;
   userName: string;
-}
-
-interface CustomerOrder {
-  id: number;
-  orderNumber: string;
-  subscription: string;
-  quantity: number;
-  amountCents: number;
-  keys: string[];
-  status: string;
-  createdAt: string;
 }
 
 function BalanceDialog({
@@ -203,53 +192,220 @@ function BalanceDialog({
   );
 }
 
-function CustomerOrdersDialog({ customer, onClose }: { customer: Customer | null; onClose: () => void }) {
-  const { data, isLoading } = useQuery<{ success: boolean; data: CustomerOrder[] }>({
-    queryKey: ["/api/admin/customers", customer?.id, "orders"],
-    queryFn: async () => {
-      const res = await fetch(`/api/admin/customers/${customer!.id}/orders`, { credentials: "include" });
-      return res.json();
-    },
-    enabled: !!customer,
-  });
-  const customerOrders = data?.data ?? [];
+interface HistoryTransaction {
+  id: number;
+  amountCents: number;
+  type: "credit" | "debit";
+  description: string;
+  createdAt: string;
+}
+interface HistoryOrder {
+  id: number;
+  orderNumber: string;
+  subscription: string;
+  quantity: number;
+  amountCents: number;
+  keys: string[];
+  status: string;
+  createdAt: string;
+}
+interface HistoryDeposit {
+  id: number;
+  amountUsdt: string;
+  amountCents: number;
+  network: string;
+  status: string;
+  txHash: string | null;
+  createdAt: string;
+}
 
+type TimelineEvent =
+  | { kind: "credit"; date: string; amountCents: number; description: string; id: string }
+  | { kind: "debit"; date: string; amountCents: number; description: string; id: string }
+  | { kind: "order"; date: string; amountCents: number; subscription: string; quantity: number; orderNumber: string; keys: string[]; status: string; id: string }
+  | { kind: "deposit"; date: string; amountCents: number; amountUsdt: string; network: string; status: string; txHash: string | null; id: string };
+
+function fmt(date: string) {
+  return new Date(date).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function OrderEvent({ ev }: { ev: Extract<TimelineEvent, { kind: "order" }> }) {
+  const [open, setOpen] = useState(false);
   return (
-    <Dialog open={!!customer} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="sm:max-w-lg max-h-[80vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>Purchase History</DialogTitle>
-        </DialogHeader>
-        <div className="text-sm text-muted-foreground mb-3">{customer?.name} · {customer?.email}</div>
-        {isLoading ? (
-          <div className="flex items-center justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>
-        ) : customerOrders.length === 0 ? (
-          <div className="text-center py-8 text-sm text-muted-foreground">No purchases yet</div>
-        ) : (
-          <div className="space-y-3">
-            {customerOrders.map((o) => (
-              <div key={o.id} className="rounded-lg border border-border bg-muted/20 p-3">
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="font-medium text-sm text-foreground">{o.subscription}</span>
-                  <span className="font-bold text-sm">${(o.amountCents / 100).toFixed(2)}</span>
-                </div>
-                <div className="text-xs text-muted-foreground mb-2">
-                  #{o.orderNumber} · {o.quantity} key{o.quantity !== 1 ? "s" : ""} · {new Date(o.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
-                </div>
-                {o.keys?.length > 0 && (
-                  <div className="space-y-1">
-                    {o.keys.map((k, i) => (
-                      <div key={i} className="flex items-center gap-2">
-                        <code className="text-xs font-mono bg-background border border-border rounded px-2 py-0.5 flex-1 truncate" data-testid={`text-order-key-${o.id}-${i}`}>{k}</code>
-                        <CopyBtn text={k} />
-                      </div>
-                    ))}
-                  </div>
-                )}
+    <div className="flex gap-3 items-start">
+      <div className="mt-0.5 w-8 h-8 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
+        <CreditCard className="w-4 h-4 text-primary" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <div className="text-sm font-medium text-foreground">{ev.subscription}</div>
+            <div className="text-xs text-muted-foreground">
+              {ev.quantity} key{ev.quantity !== 1 ? "s" : ""} · #{ev.orderNumber}
+            </div>
+          </div>
+          <div className="text-right shrink-0">
+            <div className="text-sm font-bold text-red-500 dark:text-red-400">−${(ev.amountCents / 100).toFixed(2)}</div>
+            <div className="text-xs text-muted-foreground">{fmt(ev.date)}</div>
+          </div>
+        </div>
+        {ev.keys?.length > 0 && (
+          <button
+            onClick={() => setOpen(!open)}
+            className="mt-1.5 flex items-center gap-1 text-xs text-primary hover:underline"
+          >
+            {open ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+            {open ? "Hide" : "Show"} {ev.keys.length} key{ev.keys.length !== 1 ? "s" : ""}
+          </button>
+        )}
+        {open && ev.keys.length > 0 && (
+          <div className="mt-1.5 space-y-1">
+            {ev.keys.map((k, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <code className="text-xs font-mono bg-muted/50 border border-border rounded px-2 py-0.5 flex-1 truncate" data-testid={`text-hist-key-${ev.id}-${i}`}>{k}</code>
+                <CopyBtn text={k} />
               </div>
             ))}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function CustomerHistoryDialog({ customer, onClose }: { customer: Customer | null; onClose: () => void }) {
+  const { data, isLoading } = useQuery<{ success: boolean; transactions: HistoryTransaction[]; orders: HistoryOrder[]; deposits: HistoryDeposit[] }>({
+    queryKey: ["/api/admin/customers", customer?.id, "history"],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/customers/${customer!.id}/history`, { credentials: "include" });
+      return res.json();
+    },
+    enabled: !!customer,
+  });
+
+  const events: TimelineEvent[] = [];
+  if (data?.success) {
+    for (const d of data.deposits) {
+      events.push({ kind: "deposit", id: `dep-${d.id}`, date: d.createdAt, amountCents: d.amountCents, amountUsdt: d.amountUsdt, network: d.network, status: d.status, txHash: d.txHash });
+    }
+    for (const o of data.orders) {
+      events.push({ kind: "order", id: `ord-${o.id}`, date: o.createdAt, amountCents: o.amountCents, subscription: o.subscription, quantity: o.quantity, orderNumber: o.orderNumber, keys: o.keys, status: o.status });
+    }
+    for (const t of data.transactions) {
+      if (t.type === "debit" && t.description.includes("— Order #")) continue;
+      events.push({ kind: t.type, id: `tx-${t.id}`, date: t.createdAt, amountCents: Math.abs(t.amountCents), description: t.description });
+    }
+    events.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }
+
+  return (
+    <Dialog open={!!customer} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="sm:max-w-lg max-h-[85vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Clock className="w-4 h-4 text-muted-foreground" />
+            Account History
+          </DialogTitle>
+        </DialogHeader>
+        <div className="text-sm text-muted-foreground pb-1 border-b border-border">
+          <span className="font-medium text-foreground">{customer?.name}</span> · {customer?.email}
+        </div>
+        <div className="overflow-y-auto flex-1 py-2 pr-0.5">
+          {isLoading ? (
+            <div className="flex items-center justify-center py-12"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>
+          ) : events.length === 0 ? (
+            <div className="text-center py-12">
+              <Clock className="w-10 h-10 text-muted-foreground/30 mx-auto mb-3" />
+              <p className="text-sm text-muted-foreground">No activity yet</p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {events.map((ev) => {
+                if (ev.kind === "order") {
+                  return <OrderEvent key={ev.id} ev={ev} />;
+                }
+                if (ev.kind === "credit") {
+                  return (
+                    <div key={ev.id} className="flex gap-3 items-start">
+                      <div className="mt-0.5 w-8 h-8 rounded-full bg-green-500/10 border border-green-500/20 flex items-center justify-center shrink-0">
+                        <ArrowUpCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <div className="text-sm font-medium text-foreground">Balance Added</div>
+                            <div className="text-xs text-muted-foreground">{ev.description}</div>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <div className="text-sm font-bold text-green-600 dark:text-green-400">+${(ev.amountCents / 100).toFixed(2)}</div>
+                            <div className="text-xs text-muted-foreground">{fmt(ev.date)}</div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }
+                if (ev.kind === "debit") {
+                  return (
+                    <div key={ev.id} className="flex gap-3 items-start">
+                      <div className="mt-0.5 w-8 h-8 rounded-full bg-amber-500/10 border border-amber-500/20 flex items-center justify-center shrink-0">
+                        <ArrowDownCircle className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <div className="text-sm font-medium text-foreground">Balance Deducted</div>
+                            <div className="text-xs text-muted-foreground">{ev.description}</div>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <div className="text-sm font-bold text-amber-600 dark:text-amber-400">−${(ev.amountCents / 100).toFixed(2)}</div>
+                            <div className="text-xs text-muted-foreground">{fmt(ev.date)}</div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }
+                if (ev.kind === "deposit") {
+                  const statusCls = ev.status === "completed"
+                    ? "text-green-600 dark:text-green-400 bg-green-500/10 border-green-500/20"
+                    : ev.status === "expired"
+                    ? "text-muted-foreground bg-muted/50 border-border"
+                    : "text-amber-600 dark:text-amber-400 bg-amber-500/10 border-amber-500/20";
+                  return (
+                    <div key={ev.id} className="flex gap-3 items-start">
+                      <div className="mt-0.5 w-8 h-8 rounded-full bg-blue-500/10 border border-blue-500/20 flex items-center justify-center shrink-0">
+                        <Wallet className="w-4 h-4 text-blue-500 dark:text-blue-400" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium text-foreground">Deposit Request</span>
+                              <span className={`inline-flex px-1.5 py-0.5 rounded text-xs font-medium border ${statusCls}`}>{ev.status}</span>
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {ev.network.toUpperCase()} · {ev.amountUsdt} USDT
+                              {ev.txHash && ev.txHash !== "manual-admin-approval" && (
+                                <span className="ml-1 font-mono">· {ev.txHash.slice(0, 12)}…</span>
+                              )}
+                              {ev.txHash === "manual-admin-approval" && <span className="ml-1">· manually approved</span>}
+                            </div>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <div className="text-sm font-bold text-foreground">${(ev.amountCents / 100).toFixed(2)}</div>
+                            <div className="text-xs text-muted-foreground">{fmt(ev.date)}</div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }
+                return null;
+              })}
+            </div>
+          )}
+        </div>
       </DialogContent>
     </Dialog>
   );
@@ -1059,7 +1215,7 @@ export default function AdminPage() {
         mode={balanceTarget?.mode ?? "credit"}
         onClose={() => setBalanceTarget(null)}
       />
-      <CustomerOrdersDialog customer={ordersTarget} onClose={() => setOrdersTarget(null)} />
+      <CustomerHistoryDialog customer={ordersTarget} onClose={() => setOrdersTarget(null)} />
       <DeleteCustomerDialog customer={deleteTarget} onClose={() => setDeleteTarget(null)} />
 
       <div className="mb-6 sm:mb-8">

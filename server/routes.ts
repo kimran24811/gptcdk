@@ -638,6 +638,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  app.get("/api/admin/customers/:id/history", requireAdmin, async (req, res) => {
+    const customerId = parseInt(req.params.id, 10);
+    try {
+      const [txs, customerOrders, deposits] = await Promise.all([
+        db.select().from(transactions).where(eq(transactions.userId, customerId)).orderBy(desc(transactions.createdAt)),
+        db.select().from(orders).where(eq(orders.userId, customerId)).orderBy(desc(orders.createdAt)),
+        db.select().from(depositRequests).where(eq(depositRequests.userId, customerId)).orderBy(desc(depositRequests.createdAt)),
+      ]);
+      return res.json({ success: true, transactions: txs, orders: customerOrders, deposits });
+    } catch (err) {
+      console.error("Customer history error:", err);
+      return res.status(500).json({ success: false, message: "Could not fetch history." });
+    }
+  });
+
   app.get("/api/admin/orders", requireAdmin, async (_req, res) => {
     try {
       const allOrders = await db
