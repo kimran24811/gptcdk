@@ -15,6 +15,8 @@ import {
 } from "lucide-react";
 import { PageLayout } from "@/components/page-layout";
 
+const AUTO_ACTIVATE_ENABLED = import.meta.env.VITE_ENABLE_AUTO_ACTIVATE === "true";
+
 type Step = 1 | 2 | 3;
 type Mode = "standard" | "nitro";
 
@@ -373,14 +375,16 @@ export default function RedeemPage() {
         <p className="text-muted-foreground text-sm">Safe and fast subscription activation service</p>
       </div>
 
-      {/* Mode tabs */}
-      <div className="bg-muted/50 border border-border rounded-xl p-1 flex gap-1 mb-6" data-testid="mode-tabs">
-        <ModeTab mode="standard" active={mode === "standard"} onClick={() => switchMode("standard")} />
-        <ModeTab mode="nitro" active={mode === "nitro"} onClick={() => switchMode("nitro")} />
-      </div>
+      {/* Mode tabs — only shown when auto-activate is enabled */}
+      {AUTO_ACTIVATE_ENABLED && (
+        <div className="bg-muted/50 border border-border rounded-xl p-1 flex gap-1 mb-6" data-testid="mode-tabs">
+          <ModeTab mode="standard" active={mode === "standard"} onClick={() => switchMode("standard")} />
+          <ModeTab mode="nitro" active={mode === "nitro"} onClick={() => switchMode("nitro")} />
+        </div>
+      )}
 
       {/* Mode description */}
-      {mode === "nitro" && (
+      {AUTO_ACTIVATE_ENABLED && mode === "nitro" && (
         <div className="flex items-start gap-3 mb-5 rounded-xl bg-primary/5 border border-primary/20 p-4">
           <Sparkles className="w-5 h-5 text-primary shrink-0 mt-0.5" />
           <div>
@@ -528,7 +532,7 @@ export default function RedeemPage() {
           {/* ═══════════════════════════════════════════════════════
                NITRO MODE — Step 2
           ═══════════════════════════════════════════════════════ */}
-          {mode === "nitro" && (
+          {AUTO_ACTIVATE_ENABLED && mode === "nitro" && (
             <div className={`transition-opacity duration-300 ${step >= 2 ? "opacity-100" : "opacity-40 pointer-events-none select-none"}`}>
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
                 <h2 className="text-base font-semibold text-foreground">Paste your session JSON</h2>
