@@ -945,6 +945,12 @@ function KeyInventoryTab() {
           </Select>
         </div>
 
+        {keys.length === 200 && (
+          <div className="flex items-center gap-2 text-xs text-amber-600 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2 mb-3">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+            Showing first 200 keys. Use the plan or status filter to narrow results and find specific keys.
+          </div>
+        )}
         {isLoading ? (
           <div className="flex items-center justify-center py-12"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>
         ) : keys.length === 0 ? (

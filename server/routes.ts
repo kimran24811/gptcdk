@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import bcrypt from "bcrypt";
-import { eq, desc, and, sql, inArray, lt } from "drizzle-orm";
+import { eq, desc, and, ne, sql, inArray, lt } from "drizzle-orm";
 import { db } from "./storage";
 import { users, transactions, orders, depositRequests, inventoryKeys } from "@shared/schema";
 
@@ -1152,7 +1152,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const planFilter = req.query.plan as string | undefined;
     const statusFilter = req.query.status as string | undefined;
     try {
-      const conditions = [];
+      const conditions = [ne(inventoryKeys.status, "deleted" as const)];
       if (planFilter) conditions.push(eq(inventoryKeys.plan, planFilter));
       if (statusFilter) conditions.push(eq(inventoryKeys.status, statusFilter));
 
