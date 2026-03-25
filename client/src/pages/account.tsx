@@ -46,6 +46,24 @@ function CopyBtn({ text, label }: { text: string; label?: string }) {
   );
 }
 
+function CopyAllBtn({ keys, orderId }: { keys: string[]; orderId: number }) {
+  const { copied, copy } = useCopied();
+  return (
+    <button
+      onClick={() => copy(keys.join("\n"))}
+      className={`flex items-center gap-1.5 px-2.5 py-1 rounded border text-xs font-medium transition-all shrink-0 ${
+        copied
+          ? "border-primary bg-primary/10 text-primary"
+          : "border-border bg-background text-muted-foreground hover:text-foreground"
+      }`}
+      data-testid={`button-copy-all-keys-${orderId}`}
+    >
+      {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+      {copied ? "Copied!" : `Copy All ${keys.length} Keys`}
+    </button>
+  );
+}
+
 function useCountdown(expiresAt: string | null) {
   const [remaining, setRemaining] = useState("");
   useEffect(() => {
@@ -357,7 +375,12 @@ function OrderRow({ order }: { order: Order }) {
         <div className="border-t border-border bg-muted/10 px-4 py-3 space-y-2">
           <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
             <span>Order #{order.orderNumber}</span>
-            <Badge variant="secondary">{order.status}</Badge>
+            <div className="flex items-center gap-2">
+              {order.keys && order.keys.length > 1 && (
+                <CopyAllBtn keys={order.keys} orderId={order.id} />
+              )}
+              <Badge variant="secondary">{order.status}</Badge>
+            </div>
           </div>
           {order.keys && order.keys.length > 0 ? (
             order.keys.map((key, idx) => (
