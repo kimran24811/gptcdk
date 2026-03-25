@@ -59,7 +59,7 @@ function CopyAllBtn({ keys, orderId }: { keys: string[]; orderId: number }) {
       data-testid={`button-copy-all-keys-${orderId}`}
     >
       {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-      {copied ? "Copied!" : `Copy All ${keys.length} Keys`}
+      {copied ? "Copied!" : `Copy All (${keys.length} keys)`}
     </button>
   );
 }
