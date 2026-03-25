@@ -3,11 +3,14 @@ import { useMutation } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Zap, Shield, Clock, CheckCircle, Minus, Plus, Copy, Check, Loader2, LogIn, Headphones, ArrowRight, Star, Package } from "lucide-react";
+import { Zap, Shield, Clock, CheckCircle, Minus, Plus, Copy, Check, Loader2, LogIn, Headphones, ArrowRight, Star, Package, MessageCircle } from "lucide-react";
+import claudeLogoPath from "@assets/image_1774465922033.png";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
+
+const WHATSAPP = "+447577308067";
 
 const PLANS = [
   {
@@ -332,15 +335,63 @@ function OrderDialog({ plan, onClose, onSuccess }: { plan: Plan | null; onClose:
   );
 }
 
+function ClaudeDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <div className="flex items-center gap-3">
+            <img src={claudeLogoPath} alt="Claude" className="w-10 h-10 rounded-xl" />
+            <div>
+              <DialogTitle>Claude Pro</DialogTitle>
+              <DialogDescription>Weekly subscription — available now</DialogDescription>
+            </div>
+          </div>
+        </DialogHeader>
+        <div className="space-y-4 pt-1">
+          <div className="rounded-xl border border-[#D97757]/30 bg-[#D97757]/5 p-4 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium text-foreground">Claude Pro Weekly</span>
+              <span className="text-lg font-black text-foreground">$2.30 <span className="text-xs font-normal text-muted-foreground">USDT</span></span>
+            </div>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Customer's email activation — we activate on your own account email.
+            </p>
+          </div>
+          <p className="text-sm text-muted-foreground text-center leading-relaxed">
+            Contact us on WhatsApp to place your order and get activation details.
+          </p>
+          <a
+            href={`https://wa.me/${WHATSAPP.replace(/\D/g, "")}?text=${encodeURIComponent("Hi, I'd like to order Claude Pro Weekly ($2.30)")}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            data-testid="button-claude-whatsapp"
+          >
+            <Button className="w-full gap-2 bg-[#25D366] hover:bg-[#20bd5a] text-white border-0">
+              <MessageCircle className="w-4 h-4" />
+              Order via WhatsApp
+            </Button>
+          </a>
+          <button onClick={onClose} className="w-full text-xs text-muted-foreground hover:text-foreground transition-colors py-1">
+            Cancel
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function ShopPage() {
   const [, navigate] = useLocation();
   const [orderPlan, setOrderPlan] = useState<Plan | null>(null);
   const [deliveryResult, setDeliveryResult] = useState<PurchaseResult | null>(null);
+  const [showClaude, setShowClaude] = useState(false);
 
   return (
     <div className="min-h-screen bg-background">
       <DeliveryDialog result={deliveryResult} onClose={() => setDeliveryResult(null)} />
       <OrderDialog plan={orderPlan} onClose={() => setOrderPlan(null)} onSuccess={setDeliveryResult} />
+      <ClaudeDialog open={showClaude} onClose={() => setShowClaude(false)} />
 
       {/* ── Hero ──────────────────────────────────────────────────────────── */}
       <section className="relative overflow-hidden bg-background border-b border-border">
@@ -432,7 +483,7 @@ export default function ShopPage() {
           </p>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
           {PLANS.map((plan) => (
             <div
               key={plan.id}
@@ -460,17 +511,10 @@ export default function ShopPage() {
                 <h3 className="text-base font-bold text-foreground leading-tight">{plan.name}</h3>
               </div>
 
-              <div className="mb-1">
-                {plan.hasBulk && (
-                  <span className="text-xs text-muted-foreground">from </span>
-                )}
-                <span className="text-3xl font-black text-foreground">${plan.fromPrice.toFixed(2)}</span>
+              <div className="mb-5">
+                <span className="text-3xl font-black text-foreground">${plan.price.toFixed(2)}</span>
                 <span className="text-sm text-muted-foreground ml-1">USDT</span>
               </div>
-
-              {plan.hasBulk && (
-                <p className="text-xs text-muted-foreground mb-4">Bulk discounts available</p>
-              )}
 
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-6 mt-auto">
                 <Zap className="w-3.5 h-3.5 text-primary" />
@@ -488,6 +532,49 @@ export default function ShopPage() {
               </Button>
             </div>
           ))}
+
+          {/* Claude Pro card */}
+          <div
+            className="relative rounded-2xl border border-[#D97757]/40 bg-[#D97757]/5 p-6 flex flex-col transition-all duration-200 hover:border-[#D97757]/70"
+            data-testid="plan-card-claude"
+          >
+            <div className="absolute -top-3 left-1/2 -translate-x-1/2">
+              <span className="inline-flex items-center gap-1 bg-[#D97757] text-white text-xs font-bold px-3 py-1 rounded-full shadow">
+                <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                New
+              </span>
+            </div>
+
+            <div className="mb-4">
+              <div className="flex items-center gap-2 mb-3">
+                <img src={claudeLogoPath} alt="Claude" className="w-6 h-6 rounded-md" />
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#D97757]/10 border border-[#D97757]/20 text-xs font-medium text-[#D97757]">
+                  <Clock className="w-3 h-3" />
+                  Weekly
+                </div>
+              </div>
+              <h3 className="text-base font-bold text-foreground leading-tight">Claude Pro</h3>
+            </div>
+
+            <div className="mb-5">
+              <span className="text-3xl font-black text-foreground">$2.30</span>
+              <span className="text-sm text-muted-foreground ml-1">USDT</span>
+            </div>
+
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-6 mt-auto">
+              <MessageCircle className="w-3.5 h-3.5 text-[#D97757]" />
+              <span>Via WhatsApp</span>
+            </div>
+
+            <Button
+              className="w-full gap-2 bg-[#D97757] hover:bg-[#c9673f] text-white border-0"
+              onClick={() => setShowClaude(true)}
+              data-testid="button-get-now-claude"
+            >
+              Get Now
+              <ArrowRight className="w-3.5 h-3.5" />
+            </Button>
+          </div>
         </div>
       </section>
 
