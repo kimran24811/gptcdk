@@ -621,6 +621,66 @@ export default function ShopPage() {
         </div>
       </section>
 
+      {/* ── Custom Products ───────────────────────────────────────────────── */}
+      {(customProductsData?.data?.length ?? 0) > 0 && (
+        <section className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16">
+          <div className="text-center mb-8">
+            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-primary/30 bg-primary/5 text-primary text-xs font-semibold mb-4">
+              <Store className="w-3 h-3" />
+              More Products
+            </div>
+            <h2 className="text-2xl sm:text-3xl font-black text-foreground mb-2">Additional Services</h2>
+            <p className="text-muted-foreground text-sm">Instant voucher delivery · Auto-deducted from balance</p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {customProductsData!.data.map((p) => (
+              <div
+                key={p.id}
+                className="relative rounded-2xl border border-border bg-card p-6 flex flex-col hover:border-primary/40 transition-all duration-200"
+                data-testid={`custom-product-card-${p.id}`}
+              >
+                <div className="flex items-center gap-3 mb-4">
+                  {p.logoData ? (
+                    <img src={p.logoData} alt={p.name} className="w-10 h-10 rounded-xl object-cover shrink-0" />
+                  ) : (
+                    <div className="w-10 h-10 rounded-xl bg-muted/40 flex items-center justify-center shrink-0">
+                      <Store className="w-5 h-5 text-muted-foreground/40" />
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <h3 className="font-bold text-foreground text-sm leading-tight">{p.name}</h3>
+                    {p.description && <p className="text-xs text-muted-foreground truncate">{p.description}</p>}
+                  </div>
+                </div>
+
+                <div className="mb-5 mt-auto">
+                  <span className="text-3xl font-black text-foreground">${(p.priceCents / 100).toFixed(2)}</span>
+                  <span className="text-sm text-muted-foreground ml-1">USDT</span>
+                </div>
+
+                <div className="flex items-center justify-between mb-4 text-xs text-muted-foreground">
+                  <div className="flex items-center gap-1.5">
+                    <Zap className="w-3.5 h-3.5 text-primary" />
+                    <span>Instant delivery</span>
+                  </div>
+                  {p.stock === 0 && <span className="text-red-500 font-medium">Out of stock</span>}
+                </div>
+
+                <Button
+                  className="w-full gap-2"
+                  onClick={() => setCustomPurchaseTarget(p)}
+                  disabled={p.stock === 0}
+                  data-testid={`button-buy-custom-${p.id}`}
+                >
+                  {p.stock === 0 ? "Out of Stock" : "Buy Now"}
+                  {p.stock > 0 && <ArrowRight className="w-3.5 h-3.5" />}
+                </Button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* ── Plans ─────────────────────────────────────────────────────────── */}
       <section id="plans" className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16 sm:py-24">
         <div className="text-center mb-12">
@@ -730,66 +790,6 @@ export default function ShopPage() {
           </div>
         </div>
       </section>
-
-      {/* ── Custom Products ───────────────────────────────────────────────── */}
-      {(customProductsData?.data?.length ?? 0) > 0 && (
-        <section className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16">
-          <div className="text-center mb-8">
-            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-primary/30 bg-primary/5 text-primary text-xs font-semibold mb-4">
-              <Store className="w-3 h-3" />
-              More Products
-            </div>
-            <h2 className="text-2xl sm:text-3xl font-black text-foreground mb-2">Additional Services</h2>
-            <p className="text-muted-foreground text-sm">Instant voucher delivery · Auto-deducted from balance</p>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {customProductsData!.data.map((p) => (
-              <div
-                key={p.id}
-                className="relative rounded-2xl border border-border bg-card p-6 flex flex-col hover:border-primary/40 transition-all duration-200"
-                data-testid={`custom-product-card-${p.id}`}
-              >
-                <div className="flex items-center gap-3 mb-4">
-                  {p.logoData ? (
-                    <img src={p.logoData} alt={p.name} className="w-10 h-10 rounded-xl object-cover shrink-0" />
-                  ) : (
-                    <div className="w-10 h-10 rounded-xl bg-muted/40 flex items-center justify-center shrink-0">
-                      <Store className="w-5 h-5 text-muted-foreground/40" />
-                    </div>
-                  )}
-                  <div className="min-w-0">
-                    <h3 className="font-bold text-foreground text-sm leading-tight">{p.name}</h3>
-                    {p.description && <p className="text-xs text-muted-foreground truncate">{p.description}</p>}
-                  </div>
-                </div>
-
-                <div className="mb-5 mt-auto">
-                  <span className="text-3xl font-black text-foreground">${(p.priceCents / 100).toFixed(2)}</span>
-                  <span className="text-sm text-muted-foreground ml-1">USDT</span>
-                </div>
-
-                <div className="flex items-center justify-between mb-4 text-xs text-muted-foreground">
-                  <div className="flex items-center gap-1.5">
-                    <Zap className="w-3.5 h-3.5 text-primary" />
-                    <span>Instant delivery</span>
-                  </div>
-                  {p.stock === 0 && <span className="text-red-500 font-medium">Out of stock</span>}
-                </div>
-
-                <Button
-                  className="w-full gap-2"
-                  onClick={() => setCustomPurchaseTarget(p)}
-                  disabled={p.stock === 0}
-                  data-testid={`button-buy-custom-${p.id}`}
-                >
-                  {p.stock === 0 ? "Out of Stock" : "Buy Now"}
-                  {p.stock > 0 && <ArrowRight className="w-3.5 h-3.5" />}
-                </Button>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
 
       {/* ── Features ──────────────────────────────────────────────────────── */}
       <section className="border-t border-border bg-muted/20">
