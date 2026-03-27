@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, Users, Package, DollarSign, Plus, Copy, Check, Settings, ArrowDownToLine, Key, Trash2, Search, Minus, ShoppingBag, AlertTriangle, RotateCcw, Archive, CalendarDays, User, Tag, Clock, ArrowUpCircle, ArrowDownCircle, Wallet, CreditCard, ChevronDown, ChevronUp } from "lucide-react";
+import { Loader2, Users, Package, DollarSign, Plus, Copy, Check, Settings, ArrowDownToLine, Key, Trash2, Search, Minus, ShoppingBag, AlertTriangle, RotateCcw, Archive, CalendarDays, User, Tag, Clock, ArrowUpCircle, ArrowDownCircle, Wallet, CreditCard, ChevronDown, ChevronUp, Upload, Bell, Store, Pencil, Eye, EyeOff, ExternalLink } from "lucide-react";
 
 const BINANCE_PAY_ID = "552780449";
 const BINANCE_USERNAME = "User-1d9f7";
@@ -1165,10 +1165,508 @@ function KeyInventoryTab() {
   );
 }
 
+// ── Types for custom products ────────────────────────────────────────────────
+interface AdminProduct {
+  id: number;
+  name: string;
+  description: string;
+  priceCents: number;
+  logoData: string | null;
+  active: number;
+  createdAt: string;
+  stock: { available: number; sold: number };
+}
+interface ProductVoucher {
+  id: number;
+  code: string;
+  status: string;
+  soldTo: number | null;
+  soldAt: string | null;
+  createdAt: string;
+  soldToEmail: string | null;
+  soldToName: string | null;
+}
+interface AnnouncementCfg {
+  id: number;
+  title: string;
+  body: string;
+  ctaText: string;
+  ctaUrl: string;
+  logoData: string | null;
+  isActive: number;
+  version: number;
+}
+
+// Helper: convert file to base64 data URL
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+// ── Logo upload button ───────────────────────────────────────────────────────
+function LogoUpload({ value, onChange }: { value: string | null; onChange: (v: string | null) => void }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  return (
+    <div className="flex items-center gap-3">
+      <div className={`w-14 h-14 rounded-xl border border-border flex items-center justify-center overflow-hidden shrink-0 ${value ? "bg-transparent" : "bg-muted/40"}`}>
+        {value ? (
+          <img src={value} alt="logo" className="w-full h-full object-cover rounded-xl" />
+        ) : (
+          <Store className="w-6 h-6 text-muted-foreground/40" />
+        )}
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <button
+          type="button"
+          onClick={() => inputRef.current?.click()}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-background text-xs text-foreground hover:bg-muted/40 transition-colors"
+        >
+          <Upload className="w-3.5 h-3.5" />
+          Upload Logo
+        </button>
+        {value && (
+          <button type="button" onClick={() => onChange(null)} className="text-xs text-muted-foreground hover:text-red-500 transition-colors text-left">
+            Remove
+          </button>
+        )}
+        <input
+          ref={inputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={async (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            if (file.size > 2 * 1024 * 1024) { alert("Image must be under 2 MB"); return; }
+            const dataUrl = await readFileAsDataUrl(file);
+            onChange(dataUrl);
+            e.target.value = "";
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ── Add / Edit Product dialog ────────────────────────────────────────────────
+function AddEditProductDialog({
+  product, onClose, onSaved,
+}: { product: AdminProduct | null; onClose: () => void; onSaved: () => void }) {
+  const { toast } = useToast();
+  const isEdit = !!product;
+  const [name, setName] = useState(product?.name ?? "");
+  const [description, setDescription] = useState(product?.description ?? "");
+  const [price, setPrice] = useState(product ? (product.priceCents / 100).toFixed(2) : "");
+  const [logoData, setLogoData] = useState<string | null>(product?.logoData ?? null);
+
+  const save = useMutation({
+    mutationFn: async () => {
+      const priceCents = Math.round(parseFloat(price) * 100);
+      if (!name.trim()) throw new Error("Name is required");
+      if (isNaN(priceCents) || priceCents < 1) throw new Error("Valid price is required");
+      if (isEdit) {
+        const res = await apiRequest("PATCH", `/api/admin/products/custom/${product!.id}`, { name, description, priceCents, logoData });
+        return res.json();
+      } else {
+        const res = await apiRequest("POST", "/api/admin/products/custom", { name, description, priceCents, logoData });
+        return res.json();
+      }
+    },
+    onSuccess: (d) => {
+      if (d.success) {
+        toast({ title: isEdit ? "Product updated" : "Product created" });
+        onSaved();
+        onClose();
+      } else {
+        toast({ title: "Failed", description: d.message, variant: "destructive" });
+      }
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader><DialogTitle>{isEdit ? "Edit Product" : "Add Product"}</DialogTitle></DialogHeader>
+        <div className="space-y-4 pt-1">
+          <div>
+            <label className="text-sm font-medium text-foreground block mb-1.5">Logo</label>
+            <LogoUpload value={logoData} onChange={setLogoData} />
+          </div>
+          <div>
+            <label className="text-sm font-medium text-foreground block mb-1.5">Name</label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. LinkedIn Premium Monthly" data-testid="input-product-name" />
+          </div>
+          <div>
+            <label className="text-sm font-medium text-foreground block mb-1.5">Description</label>
+            <Textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Short description shown to customers" className="min-h-[80px] resize-none text-sm" data-testid="input-product-description" />
+          </div>
+          <div>
+            <label className="text-sm font-medium text-foreground block mb-1.5">Price (USD)</label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">$</span>
+              <Input type="number" min="0.01" step="0.01" placeholder="0.00" value={price} onChange={(e) => setPrice(e.target.value)} className="pl-7" data-testid="input-product-price" />
+            </div>
+          </div>
+          <div className="flex gap-2 pt-1">
+            <Button variant="outline" className="flex-1" onClick={onClose} disabled={save.isPending}>Cancel</Button>
+            <Button className="flex-1" onClick={() => save.mutate()} disabled={save.isPending || !name.trim() || !price}>
+              {save.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+              {isEdit ? "Save Changes" : "Create Product"}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Manage Vouchers dialog ────────────────────────────────────────────────────
+function ManageVouchersDialog({ product, onClose }: { product: AdminProduct; onClose: () => void }) {
+  const { toast } = useToast();
+  const [codesText, setCodesText] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+
+  const { data, isLoading, refetch } = useQuery<{ success: boolean; data: ProductVoucher[] }>({
+    queryKey: ["/api/admin/products/custom", product.id, "vouchers", statusFilter],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (statusFilter !== "all") params.set("status", statusFilter);
+      const res = await fetch(`/api/admin/products/custom/${product.id}/vouchers?${params}`, { credentials: "include" });
+      return res.json();
+    },
+  });
+  const vouchers = data?.data ?? [];
+  const lineCount = codesText.split("\n").filter((l) => l.trim()).length;
+
+  const addCodes = useMutation({
+    mutationFn: async () => {
+      const codes = codesText.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+      const res = await apiRequest("POST", `/api/admin/products/custom/${product.id}/vouchers`, { codes });
+      return res.json();
+    },
+    onSuccess: (d) => {
+      if (d.success) { toast({ title: `${d.added} code${d.added !== 1 ? "s" : ""} added` }); setCodesText(""); refetch(); }
+      else toast({ title: "Failed", description: d.message, variant: "destructive" });
+    },
+    onError: () => toast({ title: "Error", description: "Could not add codes.", variant: "destructive" }),
+  });
+
+  const deleteVoucher = useMutation({
+    mutationFn: async (id: number) => { const res = await apiRequest("DELETE", `/api/admin/vouchers/${id}`, {}); return res.json(); },
+    onSuccess: (d) => {
+      if (d.success) { toast({ title: "Code deleted" }); refetch(); }
+      else toast({ title: "Failed", description: d.message, variant: "destructive" });
+    },
+    onError: () => toast({ title: "Error", description: "Could not delete code.", variant: "destructive" }),
+  });
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="sm:max-w-lg max-h-[85vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            {product.logoData && <img src={product.logoData} alt="" className="w-5 h-5 rounded" />}
+            {product.name} — Voucher Codes
+          </DialogTitle>
+        </DialogHeader>
+        <div className="overflow-y-auto flex-1 space-y-4 pr-0.5">
+          {/* Add codes */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-foreground">Add Codes <span className="text-muted-foreground font-normal">(one per line)</span></label>
+            <Textarea value={codesText} onChange={(e) => setCodesText(e.target.value)} placeholder={"CODE-XXXX\nCODE-YYYY\n..."} className="font-mono text-xs min-h-[90px] resize-y" data-testid="textarea-voucher-codes" />
+            {lineCount > 0 && <p className="text-xs text-muted-foreground">{lineCount} code{lineCount !== 1 ? "s" : ""} detected</p>}
+            <Button onClick={() => addCodes.mutate()} disabled={addCodes.isPending || !codesText.trim()} className="w-full gap-1.5" data-testid="button-add-codes">
+              {addCodes.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+              Add {lineCount > 0 ? lineCount : ""} Codes
+            </Button>
+          </div>
+
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm font-medium text-foreground">Inventory</span>
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger className="w-28 h-7 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All</SelectItem>
+                <SelectItem value="available">Available</SelectItem>
+                <SelectItem value="sold">Sold</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {isLoading ? (
+            <div className="flex items-center justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>
+          ) : vouchers.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-6">No codes yet</p>
+          ) : (
+            <div className="space-y-1.5">
+              {vouchers.map((v) => (
+                <div key={v.id} className="flex items-center gap-2 p-2.5 rounded-lg border border-border bg-muted/20" data-testid={`row-voucher-${v.id}`}>
+                  <span className={`text-xs px-1.5 py-0.5 rounded border font-medium shrink-0 ${v.status === "available" ? "bg-green-500/10 text-green-600 border-green-500/20" : "bg-muted text-muted-foreground border-border"}`}>{v.status}</span>
+                  <code className="text-xs font-mono text-foreground flex-1 truncate">{v.code}</code>
+                  {v.soldAt && <span className="text-xs text-muted-foreground shrink-0">{v.soldToName ?? v.soldToEmail}</span>}
+                  <CopyBtn text={v.code} />
+                  {v.status === "available" && (
+                    <button onClick={() => deleteVoucher.mutate(v.id)} disabled={deleteVoucher.isPending} className="p-1 rounded text-muted-foreground hover:text-red-500 transition-colors" data-testid={`button-delete-voucher-${v.id}`}>
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Popup editor dialog ──────────────────────────────────────────────────────
+function PopupEditorDialog({ onClose }: { onClose: () => void }) {
+  const { toast } = useToast();
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [ctaText, setCtaText] = useState("");
+  const [ctaUrl, setCtaUrl] = useState("");
+  const [logoData, setLogoData] = useState<string | null>(null);
+  const [isActive, setIsActive] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  const { isLoading, data: announcementData } = useQuery<{ success: boolean; config: AnnouncementCfg | null }>({
+    queryKey: ["/api/admin/announcement"],
+    queryFn: async () => { const res = await fetch("/api/admin/announcement", { credentials: "include" }); return res.json(); },
+  });
+
+  useEffect(() => {
+    if (announcementData && !loaded) {
+      if (announcementData.config) {
+        setTitle(announcementData.config.title);
+        setBody(announcementData.config.body);
+        setCtaText(announcementData.config.ctaText);
+        setCtaUrl(announcementData.config.ctaUrl);
+        setLogoData(announcementData.config.logoData ?? null);
+        setIsActive(announcementData.config.isActive === 1);
+      }
+      setLoaded(true);
+    }
+  }, [announcementData, loaded]);
+
+  const save = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("PUT", "/api/admin/announcement", { title, body, ctaText, ctaUrl, logoData, isActive });
+      return res.json();
+    },
+    onSuccess: (d) => {
+      if (d.success) {
+        toast({ title: "Popup saved", description: isActive ? "Popup is now live for all visitors." : "Popup saved (disabled)." });
+        queryClient.invalidateQueries({ queryKey: ["/api/announcement"] });
+        onClose();
+      } else {
+        toast({ title: "Failed", description: d.message, variant: "destructive" });
+      }
+    },
+    onError: () => toast({ title: "Error", description: "Could not save popup.", variant: "destructive" }),
+  });
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="sm:max-w-md max-h-[90vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Bell className="w-4 h-4 text-muted-foreground" /> Announcement Popup</DialogTitle>
+        </DialogHeader>
+        <div className="overflow-y-auto flex-1 space-y-4 pr-0.5 pt-1">
+          {isLoading ? (
+            <div className="flex items-center justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>
+          ) : (
+            <>
+              <div>
+                <label className="text-sm font-medium text-foreground block mb-1.5">Logo / Image</label>
+                <LogoUpload value={logoData} onChange={setLogoData} />
+              </div>
+              <div>
+                <label className="text-sm font-medium text-foreground block mb-1.5">Title</label>
+                <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Claude Pro Weekly" data-testid="input-popup-title" />
+              </div>
+              <div>
+                <label className="text-sm font-medium text-foreground block mb-1.5">Body text</label>
+                <Textarea value={body} onChange={(e) => setBody(e.target.value)} placeholder="Describe your announcement..." className="min-h-[100px] resize-y text-sm" data-testid="input-popup-body" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-sm font-medium text-foreground block mb-1.5">Button text</label>
+                  <Input value={ctaText} onChange={(e) => setCtaText(e.target.value)} placeholder="e.g. Contact on WhatsApp" data-testid="input-popup-cta-text" />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-foreground block mb-1.5">Button URL</label>
+                  <Input value={ctaUrl} onChange={(e) => setCtaUrl(e.target.value)} placeholder="https://wa.me/..." data-testid="input-popup-cta-url" />
+                </div>
+              </div>
+              <div className="flex items-center justify-between p-3 rounded-lg border border-border bg-muted/20">
+                <div>
+                  <div className="text-sm font-medium text-foreground">Show popup to visitors</div>
+                  <div className="text-xs text-muted-foreground">When enabled, all visitors will see this popup. Saving increments the version so existing visitors see it again.</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsActive(!isActive)}
+                  className={`relative w-10 h-6 rounded-full transition-colors shrink-0 ${isActive ? "bg-primary" : "bg-muted border border-border"}`}
+                  data-testid="toggle-popup-active"
+                >
+                  <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${isActive ? "translate-x-5" : "translate-x-0.5"}`} />
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+        <div className="flex gap-2 pt-2 border-t border-border">
+          <Button variant="outline" className="flex-1" onClick={onClose} disabled={save.isPending}>Cancel</Button>
+          <Button className="flex-1" onClick={() => save.mutate()} disabled={save.isPending || isLoading}>
+            {save.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+            Save & Publish
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Products tab ─────────────────────────────────────────────────────────────
+function ProductsTab() {
+  const { toast } = useToast();
+  const [showPopupEditor, setShowPopupEditor] = useState(false);
+  const [addProduct, setAddProduct] = useState(false);
+  const [editProduct, setEditProduct] = useState<AdminProduct | null>(null);
+  const [manageVouchers, setManageVouchers] = useState<AdminProduct | null>(null);
+
+  const { data, isLoading, refetch } = useQuery<{ success: boolean; data: AdminProduct[] }>({
+    queryKey: ["/api/admin/products/custom"],
+    queryFn: async () => { const res = await fetch("/api/admin/products/custom", { credentials: "include" }); return res.json(); },
+  });
+  const products = data?.data ?? [];
+
+  const toggleActive = useMutation({
+    mutationFn: async ({ id, active }: { id: number; active: boolean }) => {
+      const res = await apiRequest("PATCH", `/api/admin/products/custom/${id}`, { active });
+      return res.json();
+    },
+    onSuccess: (d) => { if (d.success) refetch(); else toast({ title: "Failed", description: d.message, variant: "destructive" }); },
+    onError: () => toast({ title: "Error", description: "Could not update product.", variant: "destructive" }),
+  });
+
+  const deleteProduct = useMutation({
+    mutationFn: async (id: number) => { const res = await apiRequest("DELETE", `/api/admin/products/custom/${id}`, {}); return res.json(); },
+    onSuccess: (d) => {
+      if (d.success) { toast({ title: "Product deleted" }); refetch(); }
+      else toast({ title: "Failed", description: d.message, variant: "destructive" });
+    },
+    onError: () => toast({ title: "Error", description: "Could not delete product.", variant: "destructive" }),
+  });
+
+  return (
+    <div className="space-y-5">
+      {showPopupEditor && <PopupEditorDialog onClose={() => setShowPopupEditor(false)} />}
+      {(addProduct || editProduct) && (
+        <AddEditProductDialog
+          product={editProduct}
+          onClose={() => { setAddProduct(false); setEditProduct(null); }}
+          onSaved={refetch}
+        />
+      )}
+      {manageVouchers && <ManageVouchersDialog product={manageVouchers} onClose={() => setManageVouchers(null)} />}
+
+      {/* Header */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <h3 className="text-sm font-semibold text-foreground flex-1">Custom Products</h3>
+        <Button variant="outline" size="sm" onClick={() => setShowPopupEditor(true)} className="gap-1.5 h-8 text-xs" data-testid="button-manage-popup">
+          <Bell className="w-3.5 h-3.5" />
+          Manage Popup
+        </Button>
+        <Button size="sm" onClick={() => setAddProduct(true)} className="gap-1.5 h-8 text-xs" data-testid="button-add-product">
+          <Plus className="w-3.5 h-3.5" />
+          Add Product
+        </Button>
+      </div>
+
+      {isLoading ? (
+        <div className="flex items-center justify-center py-12"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>
+      ) : products.length === 0 ? (
+        <Card className="border border-card-border">
+          <CardContent className="p-10 text-center">
+            <Store className="w-10 h-10 text-muted-foreground/30 mx-auto mb-3" />
+            <p className="text-sm text-muted-foreground">No custom products yet</p>
+            <p className="text-xs text-muted-foreground/70 mt-1">Add a product like LinkedIn Premium to get started</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-2">
+          {products.map((p) => (
+            <Card key={p.id} className={`border ${p.active ? "border-card-border" : "border-border opacity-60"}`} data-testid={`row-product-${p.id}`}>
+              <CardContent className="p-4">
+                <div className="flex items-start gap-3">
+                  {/* Logo */}
+                  <div className="w-10 h-10 rounded-lg border border-border flex items-center justify-center overflow-hidden shrink-0 bg-muted/20">
+                    {p.logoData ? <img src={p.logoData} alt="" className="w-full h-full object-cover rounded-lg" /> : <Store className="w-5 h-5 text-muted-foreground/40" />}
+                  </div>
+                  {/* Info */}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap mb-0.5">
+                      <span className="font-semibold text-foreground text-sm">{p.name}</span>
+                      <span className="font-bold text-primary text-sm">${(p.priceCents / 100).toFixed(2)}</span>
+                      {!p.active && <Badge variant="secondary" className="text-xs">Hidden</Badge>}
+                    </div>
+                    {p.description && <p className="text-xs text-muted-foreground truncate">{p.description}</p>}
+                    <div className="flex items-center gap-3 mt-1">
+                      <span className="text-xs text-green-600 dark:text-green-400 font-medium">{p.stock.available} available</span>
+                      <span className="text-xs text-muted-foreground">{p.stock.sold} sold</span>
+                    </div>
+                  </div>
+                  {/* Actions */}
+                  <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                    <Button size="sm" variant="outline" className="h-7 px-2 text-xs gap-1" onClick={() => setManageVouchers(p)} data-testid={`button-manage-vouchers-${p.id}`}>
+                      <Key className="w-3 h-3" />
+                      Codes
+                    </Button>
+                    <Button size="sm" variant="outline" className="h-7 px-2 text-xs gap-1" onClick={() => setEditProduct(p)} data-testid={`button-edit-product-${p.id}`}>
+                      <Pencil className="w-3 h-3" />
+                    </Button>
+                    <button
+                      onClick={() => toggleActive.mutate({ id: p.id, active: !p.active })}
+                      disabled={toggleActive.isPending}
+                      className="h-7 px-2 flex items-center gap-1 rounded border border-border bg-background text-muted-foreground hover:text-foreground text-xs transition-colors"
+                      title={p.active ? "Hide from shop" : "Show in shop"}
+                      data-testid={`button-toggle-product-${p.id}`}
+                    >
+                      {p.active ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                    </button>
+                    <button
+                      onClick={() => { if (confirm(`Delete "${p.name}" and all its codes?`)) deleteProduct.mutate(p.id); }}
+                      disabled={deleteProduct.isPending}
+                      className="h-7 px-2 flex items-center gap-1 rounded border border-border bg-background text-muted-foreground hover:text-red-500 hover:border-red-500/40 text-xs transition-colors"
+                      data-testid={`button-delete-product-${p.id}`}
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AdminPage() {
   const [, navigate] = useLocation();
   const { user, isAdmin, isLoading } = useAuth();
-  const [tab, setTab] = useState<"customers" | "orders" | "deposits" | "inventory" | "settings">("customers");
+  const [tab, setTab] = useState<"customers" | "orders" | "deposits" | "inventory" | "products" | "settings">("customers");
   const [balanceTarget, setBalanceTarget] = useState<{ customer: Customer; mode: "credit" | "debit" } | null>(null);
   const [ordersTarget, setOrdersTarget] = useState<Customer | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Customer | null>(null);
@@ -1258,7 +1756,7 @@ export default function AdminPage() {
 
       {/* Tabs */}
       <div className="flex gap-1 mb-5 border-b border-border overflow-x-auto">
-        {(["customers", "orders", "deposits", "inventory", "settings"] as const).map((t) => (
+        {(["customers", "orders", "deposits", "inventory", "products", "settings"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -1416,6 +1914,9 @@ export default function AdminPage() {
 
       {/* Key Inventory tab */}
       {tab === "inventory" && <KeyInventoryTab />}
+
+      {/* Products tab */}
+      {tab === "products" && <ProductsTab />}
 
       {/* Settings tab */}
       {tab === "settings" && <SettingsTab user={user} />}

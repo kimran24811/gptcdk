@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import bcrypt from "bcrypt";
 import { eq, desc, and, ne, sql, inArray, lt } from "drizzle-orm";
 import { db } from "./storage";
-import { users, transactions, orders, depositRequests, inventoryKeys } from "@shared/schema";
+import { users, transactions, orders, depositRequests, inventoryKeys, customProducts, customVouchers, announcementConfig } from "@shared/schema";
 
 const USDT_BEP20_ADDRESS = process.env.USDT_BEP20_ADDRESS || "0x0c31c91ec2cbb607aeca28c1bc09c55352db2fea";
 const USDT_TRC20_ADDRESS = process.env.USDT_TRC20_ADDRESS || "TLUSXogZfhgWGHpTBHNtNQPanq6AvNfCY4";
@@ -1492,6 +1492,244 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (err) {
       console.error("Batch status error:", err);
       return res.status(500).json({ success: false, message: "Service unavailable. Please try again." });
+    }
+  });
+
+  // ── Announcement config ──────────────────────────────────────────────────────
+
+  app.get("/api/announcement", async (_req, res) => {
+    try {
+      const rows = await db.select().from(announcementConfig).orderBy(desc(announcementConfig.id)).limit(1);
+      if (rows.length === 0 || !rows[0].isActive) return res.json({ success: true, active: false });
+      return res.json({ success: true, active: true, config: rows[0] });
+    } catch (err) {
+      console.error("Announcement fetch error:", err);
+      return res.json({ success: false, active: false });
+    }
+  });
+
+  app.get("/api/admin/announcement", requireAdmin, async (_req, res) => {
+    try {
+      const rows = await db.select().from(announcementConfig).orderBy(desc(announcementConfig.id)).limit(1);
+      return res.json({ success: true, config: rows[0] ?? null });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: "Could not fetch config." });
+    }
+  });
+
+  app.put("/api/admin/announcement", requireAdmin, async (req, res) => {
+    const { title, body, ctaText, ctaUrl, logoData, isActive } = req.body;
+    try {
+      const rows = await db.select().from(announcementConfig).limit(1);
+      if (rows.length === 0) {
+        await db.insert(announcementConfig).values({
+          title: title ?? "", body: body ?? "", ctaText: ctaText ?? "",
+          ctaUrl: ctaUrl ?? "", logoData: logoData ?? null,
+          isActive: isActive ? 1 : 0, version: 1,
+        });
+      } else {
+        await db.update(announcementConfig)
+          .set({ title: title ?? "", body: body ?? "", ctaText: ctaText ?? "",
+            ctaUrl: ctaUrl ?? "", logoData: logoData ?? null,
+            isActive: isActive ? 1 : 0, version: rows[0].version + 1,
+            updatedAt: new Date() })
+          .where(eq(announcementConfig.id, rows[0].id));
+      }
+      const [updated] = await db.select().from(announcementConfig).limit(1);
+      return res.json({ success: true, config: updated });
+    } catch (err) {
+      console.error("Announcement update error:", err);
+      return res.status(500).json({ success: false, message: "Could not update popup." });
+    }
+  });
+
+  // ── Custom Products ───────────────────────────────────────────────────────────
+
+  app.get("/api/products/custom", async (_req, res) => {
+    try {
+      const products = await db.select().from(customProducts)
+        .where(eq(customProducts.active, 1))
+        .orderBy(desc(customProducts.createdAt));
+      const counts = await db.execute<{ product_id: number; cnt: string }>(
+        sql`SELECT product_id, COUNT(*) as cnt FROM custom_vouchers WHERE status='available' GROUP BY product_id`
+      );
+      const stockMap: Record<number, number> = {};
+      counts.rows.forEach((r) => { stockMap[r.product_id] = parseInt(r.cnt); });
+      return res.json({ success: true, data: products.map((p) => ({ ...p, stock: stockMap[p.id] ?? 0 })) });
+    } catch (err) {
+      console.error("Custom products fetch error:", err);
+      return res.status(500).json({ success: false, message: "Could not fetch products." });
+    }
+  });
+
+  app.get("/api/admin/products/custom", requireAdmin, async (_req, res) => {
+    try {
+      const products = await db.select().from(customProducts).orderBy(desc(customProducts.createdAt));
+      const counts = await db.execute<{ product_id: number; status: string; cnt: string }>(
+        sql`SELECT product_id, status, COUNT(*) as cnt FROM custom_vouchers GROUP BY product_id, status`
+      );
+      const stockMap: Record<number, { available: number; sold: number }> = {};
+      counts.rows.forEach((r) => {
+        if (!stockMap[r.product_id]) stockMap[r.product_id] = { available: 0, sold: 0 };
+        if (r.status === "available") stockMap[r.product_id].available = parseInt(r.cnt);
+        if (r.status === "sold") stockMap[r.product_id].sold = parseInt(r.cnt);
+      });
+      return res.json({ success: true, data: products.map((p) => ({ ...p, stock: stockMap[p.id] ?? { available: 0, sold: 0 } })) });
+    } catch (err) {
+      console.error("Admin custom products error:", err);
+      return res.status(500).json({ success: false, message: "Could not fetch products." });
+    }
+  });
+
+  app.post("/api/admin/products/custom", requireAdmin, async (req, res) => {
+    const { name, description, priceCents, logoData } = req.body;
+    if (!name?.trim()) return res.json({ success: false, message: "Product name is required." });
+    if (!priceCents || isNaN(parseInt(priceCents)) || parseInt(priceCents) < 1)
+      return res.json({ success: false, message: "Valid price is required." });
+    try {
+      const [product] = await db.insert(customProducts).values({
+        name: name.trim(), description: (description ?? "").trim(),
+        priceCents: parseInt(priceCents), logoData: logoData ?? null, active: 1,
+      }).returning();
+      return res.json({ success: true, product });
+    } catch (err) {
+      console.error("Create custom product error:", err);
+      return res.status(500).json({ success: false, message: "Could not create product." });
+    }
+  });
+
+  app.patch("/api/admin/products/custom/:id", requireAdmin, async (req, res) => {
+    const productId = parseInt(req.params.id, 10);
+    const { name, description, priceCents, logoData, active } = req.body;
+    try {
+      const updates: Partial<{ name: string; description: string; priceCents: number; logoData: string | null; active: number }> = {};
+      if (name !== undefined) updates.name = name.trim();
+      if (description !== undefined) updates.description = description.trim();
+      if (priceCents !== undefined) updates.priceCents = parseInt(priceCents);
+      if (logoData !== undefined) updates.logoData = logoData ?? null;
+      if (active !== undefined) updates.active = active ? 1 : 0;
+      if (Object.keys(updates).length === 0) return res.json({ success: true });
+      await db.update(customProducts).set(updates).where(eq(customProducts.id, productId));
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("Update custom product error:", err);
+      return res.status(500).json({ success: false, message: "Could not update product." });
+    }
+  });
+
+  app.delete("/api/admin/products/custom/:id", requireAdmin, async (req, res) => {
+    const productId = parseInt(req.params.id, 10);
+    try {
+      await db.delete(customVouchers).where(eq(customVouchers.productId, productId));
+      await db.delete(customProducts).where(eq(customProducts.id, productId));
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("Delete custom product error:", err);
+      return res.status(500).json({ success: false, message: "Could not delete product." });
+    }
+  });
+
+  // ── Custom Vouchers ───────────────────────────────────────────────────────────
+
+  app.get("/api/admin/products/custom/:id/vouchers", requireAdmin, async (req, res) => {
+    const productId = parseInt(req.params.id, 10);
+    const statusFilter = req.query.status as string | undefined;
+    try {
+      const conditions = [eq(customVouchers.productId, productId)];
+      if (statusFilter) conditions.push(eq(customVouchers.status, statusFilter));
+      const vouchers = await db.select({
+        id: customVouchers.id,
+        code: customVouchers.code,
+        status: customVouchers.status,
+        soldTo: customVouchers.soldTo,
+        soldAt: customVouchers.soldAt,
+        createdAt: customVouchers.createdAt,
+        soldToEmail: users.email,
+        soldToName: users.name,
+      }).from(customVouchers)
+        .leftJoin(users, eq(customVouchers.soldTo, users.id))
+        .where(and(...conditions))
+        .orderBy(desc(customVouchers.createdAt))
+        .limit(200);
+      return res.json({ success: true, data: vouchers });
+    } catch (err) {
+      console.error("Voucher list error:", err);
+      return res.status(500).json({ success: false, message: "Could not fetch vouchers." });
+    }
+  });
+
+  app.post("/api/admin/products/custom/:id/vouchers", requireAdmin, async (req, res) => {
+    const productId = parseInt(req.params.id, 10);
+    const { codes } = req.body;
+    if (!Array.isArray(codes) || codes.length === 0)
+      return res.json({ success: false, message: "At least one code is required." });
+    const clean = codes.map((c: string) => c.trim()).filter((c: string) => c.length > 0);
+    if (clean.length === 0) return res.json({ success: false, message: "No valid codes found." });
+    if (clean.length > 500) return res.json({ success: false, message: "Maximum 500 codes per batch." });
+    try {
+      const [product] = await db.select().from(customProducts).where(eq(customProducts.id, productId));
+      if (!product) return res.json({ success: false, message: "Product not found." });
+      await db.insert(customVouchers).values(clean.map((code) => ({ productId, code, status: "available" as const })));
+      return res.json({ success: true, added: clean.length });
+    } catch (err) {
+      console.error("Add vouchers error:", err);
+      return res.status(500).json({ success: false, message: "Could not add codes." });
+    }
+  });
+
+  app.delete("/api/admin/vouchers/:id", requireAdmin, async (req, res) => {
+    const voucherId = parseInt(req.params.id, 10);
+    try {
+      const [v] = await db.select().from(customVouchers).where(eq(customVouchers.id, voucherId));
+      if (!v) return res.json({ success: false, message: "Voucher not found." });
+      if (v.status !== "available") return res.json({ success: false, message: "Only unsold vouchers can be deleted." });
+      await db.delete(customVouchers).where(eq(customVouchers.id, voucherId));
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("Delete voucher error:", err);
+      return res.status(500).json({ success: false, message: "Could not delete voucher." });
+    }
+  });
+
+  // ── Purchase custom product ───────────────────────────────────────────────────
+
+  app.post("/api/purchase-custom", requireAuth, async (req, res) => {
+    const { productId } = req.body;
+    if (!productId) return res.json({ success: false, message: "Product ID is required." });
+    try {
+      const [user] = await db.select().from(users).where(eq(users.id, req.session.userId!));
+      if (!user) return res.json({ success: false, message: "User not found." });
+
+      const [product] = await db.select().from(customProducts)
+        .where(and(eq(customProducts.id, parseInt(productId)), eq(customProducts.active, 1)));
+      if (!product) return res.json({ success: false, message: "Product not found or unavailable." });
+
+      if (user.balanceCents < product.priceCents) {
+        const shortfall = ((product.priceCents - user.balanceCents) / 100).toFixed(2);
+        return res.json({ success: false, message: `Insufficient balance. You need $${shortfall} more.`, code: "insufficient_balance" });
+      }
+
+      const allocated = await db.transaction(async (tx) => {
+        const rows = await tx.execute<{ id: number; code: string }>(
+          sql`SELECT id, code FROM custom_vouchers WHERE product_id = ${product.id} AND status = 'available' ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED`
+        );
+        if (rows.rows.length === 0) return null;
+        const voucher = rows.rows[0];
+        await tx.update(customVouchers).set({ status: "sold", soldTo: user.id, soldAt: new Date() }).where(eq(customVouchers.id, voucher.id));
+        return voucher.code;
+      });
+
+      if (!allocated) return res.json({ success: false, message: "This product is currently out of stock." });
+
+      const orderNumber = `C-${Date.now()}-${user.id}`;
+      await db.update(users).set({ balanceCents: user.balanceCents - product.priceCents }).where(eq(users.id, user.id));
+      await db.insert(transactions).values({ userId: user.id, amountCents: -product.priceCents, type: "debit", description: `${product.name} — Order #${orderNumber}`, createdBy: user.id });
+      await db.insert(orders).values({ userId: user.id, orderNumber, product: product.name, subscription: product.name, quantity: 1, amountCents: product.priceCents, keys: [allocated], status: "delivered" });
+
+      return res.json({ success: true, key: allocated, orderNumber, product: product.name, balanceCents: user.balanceCents - product.priceCents, amountCents: product.priceCents });
+    } catch (err) {
+      console.error("Purchase custom product error:", err);
+      return res.status(500).json({ success: false, message: "Purchase failed. Please try again." });
     }
   });
 

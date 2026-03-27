@@ -90,6 +90,9 @@ Drizzle ORM with these tables:
 | `orders` | id, user_id, order_number, product, subscription, quantity, amount_cents, keys (text[]), status, created_at |
 | `deposit_requests` | id, user_id, amount_usdt, amount_cents, network (trc20\|bep20), status (pending\|completed\|expired), tx_hash, created_at, expires_at |
 | `inventory_keys` | id, plan, key, status (available\|sold), added_by, sold_to, sold_at, created_at |
+| `custom_products` | id, name, description, price_cents, logo_data (base64), active, created_at |
+| `custom_vouchers` | id, product_id, code, status (available\|sold), sold_to, sold_at, created_at |
+| `announcement_config` | id, title, body, cta_text, cta_url, logo_data, is_active, version, updated_at |
 | `session` | (managed by connect-pg-simple) |
 
 ### External API: keys.ovh

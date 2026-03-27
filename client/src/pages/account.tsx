@@ -392,14 +392,16 @@ function OrderRow({ order }: { order: Order }) {
                 <code className="text-xs font-mono text-foreground flex-1 truncate">{key}</code>
                 <div className="flex items-center gap-1.5 shrink-0">
                   <CopyBtn text={key} label={`key-${order.id}-${idx}`} />
-                  <a
-                    href={`/?key=${encodeURIComponent(key)}`}
-                    className="flex items-center gap-1 px-2 py-1 rounded border border-primary/40 bg-primary/5 text-primary text-xs font-medium hover:bg-primary/10 transition-colors"
-                    data-testid={`button-redeem-key-${order.id}-${idx}`}
-                  >
-                    <Zap className="w-3 h-3" />
-                    Redeem
-                  </a>
+                  {!order.orderNumber.startsWith("C-") && (
+                    <a
+                      href={`/?key=${encodeURIComponent(key)}`}
+                      className="flex items-center gap-1 px-2 py-1 rounded border border-primary/40 bg-primary/5 text-primary text-xs font-medium hover:bg-primary/10 transition-colors"
+                      data-testid={`button-redeem-key-${order.id}-${idx}`}
+                    >
+                      <Zap className="w-3 h-3" />
+                      Redeem
+                    </a>
+                  )}
                 </div>
               </div>
             ))

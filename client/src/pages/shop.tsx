@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Zap, Shield, Clock, CheckCircle, Minus, Plus, Copy, Check, Loader2, LogIn, Headphones, ArrowRight, Star, Package, MessageCircle } from "lucide-react";
+import { Zap, Shield, Clock, CheckCircle, Minus, Plus, Copy, Check, Loader2, LogIn, Headphones, ArrowRight, Star, Package, MessageCircle, Store } from "lucide-react";
 import claudeLogoPath from "@assets/image_1774465922033.png";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -381,17 +381,170 @@ function ClaudeDialog({ open, onClose }: { open: boolean; onClose: () => void })
   );
 }
 
+// ── Custom products ───────────────────────────────────────────────────────────
+interface CustomProduct {
+  id: number;
+  name: string;
+  description: string;
+  priceCents: number;
+  logoData: string | null;
+  stock: number;
+}
+
+interface CustomDeliveryResult {
+  key: string;
+  orderNumber: string;
+  product: string;
+  amountCents: number;
+  balanceCents: number;
+}
+
+function CustomDeliveryDialog({ result, onClose }: { result: CustomDeliveryResult | null; onClose: () => void }) {
+  return (
+    <Dialog open={!!result} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
+              <CheckCircle className="w-4 h-4 text-primary" />
+            </div>
+            <div>
+              <DialogTitle className="text-base">Purchase Successful!</DialogTitle>
+              {result && (
+                <DialogDescription className="text-xs">Order #{result.orderNumber} · ${(result.amountCents / 100).toFixed(2)}</DialogDescription>
+              )}
+            </div>
+          </div>
+        </DialogHeader>
+        {result && (
+          <div className="space-y-4 pt-1">
+            <div>
+              <p className="text-xs text-muted-foreground mb-2">Your voucher code for <span className="font-medium text-foreground">{result.product}</span>:</p>
+              <div className="flex items-center gap-2 p-3 rounded-lg bg-muted/40 border border-border" data-testid="delivery-custom-key">
+                <code className="text-sm font-mono text-foreground flex-1 break-all">{result.key}</code>
+                <CopyButton text={result.key} />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">New balance: <span className="font-semibold text-foreground">${(result.balanceCents / 100).toFixed(2)}</span></p>
+            <Button className="w-full" onClick={onClose} data-testid="button-close-custom-delivery">Done</Button>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function CustomPurchaseDialog({ product, onClose, onSuccess }: { product: CustomProduct; onClose: () => void; onSuccess: (r: CustomDeliveryResult) => void }) {
+  const { toast } = useToast();
+  const { user } = useAuth();
+  const [, navigate] = useLocation();
+  const balanceSufficient = user ? user.balanceCents >= product.priceCents : false;
+  const shortfall = user ? Math.max(0, product.priceCents - user.balanceCents) / 100 : 0;
+
+  const purchase = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/purchase-custom", { productId: product.id });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      if (data.success) {
+        queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/me/orders"] });
+        onClose();
+        onSuccess(data as CustomDeliveryResult);
+      } else if (data.code === "insufficient_balance") {
+        toast({ title: "Insufficient balance", description: data.message, variant: "destructive" });
+      } else {
+        toast({ title: "Purchase failed", description: data.message, variant: "destructive" });
+      }
+    },
+    onError: () => toast({ title: "Error", description: "Purchase failed. Please try again.", variant: "destructive" }),
+  });
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="text-base">Confirm Purchase</DialogTitle>
+          <DialogDescription className="text-sm">{product.name}</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 pt-1">
+          <div className="flex items-center gap-3 p-3 rounded-lg border border-border bg-muted/20">
+            {product.logoData ? (
+              <img src={product.logoData} alt="" className="w-10 h-10 rounded-lg object-cover shrink-0" />
+            ) : (
+              <div className="w-10 h-10 rounded-lg bg-muted/40 flex items-center justify-center shrink-0"><Store className="w-5 h-5 text-muted-foreground/40" /></div>
+            )}
+            <div className="min-w-0 flex-1">
+              <div className="font-semibold text-foreground text-sm">{product.name}</div>
+              {product.description && <div className="text-xs text-muted-foreground truncate">{product.description}</div>}
+            </div>
+            <div className="shrink-0 font-bold text-foreground">${(product.priceCents / 100).toFixed(2)}</div>
+          </div>
+
+          {user ? (
+            <>
+              {!balanceSufficient && (
+                <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-sm text-amber-600 dark:text-amber-400">
+                  Insufficient balance. You need <span className="font-semibold">${shortfall.toFixed(2)}</span> more.{" "}
+                  <a href="/account" className="underline font-medium">Top up →</a>
+                </div>
+              )}
+              {balanceSufficient && (
+                <p className="text-xs text-muted-foreground">Your balance: <span className="font-semibold text-foreground">${(user.balanceCents / 100).toFixed(2)}</span></p>
+              )}
+              <div className="flex gap-2">
+                <Button variant="outline" className="flex-1" onClick={onClose} disabled={purchase.isPending}>Cancel</Button>
+                <Button className="flex-1" onClick={() => purchase.mutate()} disabled={purchase.isPending || !balanceSufficient} data-testid="button-confirm-custom-purchase">
+                  {purchase.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                  Buy for ${(product.priceCents / 100).toFixed(2)}
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-muted-foreground">You need to log in to purchase this item.</p>
+              <div className="flex gap-2">
+                <Button variant="outline" className="flex-1" onClick={onClose}>Cancel</Button>
+                <Button className="flex-1 gap-2" onClick={() => navigate("/login")} data-testid="button-login-to-purchase">
+                  <LogIn className="w-4 h-4" />
+                  Log In
+                </Button>
+              </div>
+            </>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function ShopPage() {
   const [, navigate] = useLocation();
   const [orderPlan, setOrderPlan] = useState<Plan | null>(null);
   const [deliveryResult, setDeliveryResult] = useState<PurchaseResult | null>(null);
   const [showClaude, setShowClaude] = useState(false);
+  const [customPurchaseTarget, setCustomPurchaseTarget] = useState<CustomProduct | null>(null);
+  const [customDeliveryResult, setCustomDeliveryResult] = useState<CustomDeliveryResult | null>(null);
+
+  const { data: customProductsData } = useQuery<{ success: boolean; data: CustomProduct[] }>({
+    queryKey: ["/api/products/custom"],
+    staleTime: 60_000,
+  });
 
   return (
     <div className="min-h-screen bg-background">
       <DeliveryDialog result={deliveryResult} onClose={() => setDeliveryResult(null)} />
       <OrderDialog plan={orderPlan} onClose={() => setOrderPlan(null)} onSuccess={setDeliveryResult} />
       <ClaudeDialog open={showClaude} onClose={() => setShowClaude(false)} />
+      {customPurchaseTarget && (
+        <CustomPurchaseDialog
+          product={customPurchaseTarget}
+          onClose={() => setCustomPurchaseTarget(null)}
+          onSuccess={setCustomDeliveryResult}
+        />
+      )}
+      <CustomDeliveryDialog result={customDeliveryResult} onClose={() => setCustomDeliveryResult(null)} />
 
       {/* ── Hero ──────────────────────────────────────────────────────────── */}
       <section className="relative overflow-hidden bg-background border-b border-border">
@@ -577,6 +730,66 @@ export default function ShopPage() {
           </div>
         </div>
       </section>
+
+      {/* ── Custom Products ───────────────────────────────────────────────── */}
+      {(customProductsData?.data?.length ?? 0) > 0 && (
+        <section className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16">
+          <div className="text-center mb-8">
+            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-primary/30 bg-primary/5 text-primary text-xs font-semibold mb-4">
+              <Store className="w-3 h-3" />
+              More Products
+            </div>
+            <h2 className="text-2xl sm:text-3xl font-black text-foreground mb-2">Additional Services</h2>
+            <p className="text-muted-foreground text-sm">Instant voucher delivery · Auto-deducted from balance</p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {customProductsData!.data.map((p) => (
+              <div
+                key={p.id}
+                className="relative rounded-2xl border border-border bg-card p-6 flex flex-col hover:border-primary/40 transition-all duration-200"
+                data-testid={`custom-product-card-${p.id}`}
+              >
+                <div className="flex items-center gap-3 mb-4">
+                  {p.logoData ? (
+                    <img src={p.logoData} alt={p.name} className="w-10 h-10 rounded-xl object-cover shrink-0" />
+                  ) : (
+                    <div className="w-10 h-10 rounded-xl bg-muted/40 flex items-center justify-center shrink-0">
+                      <Store className="w-5 h-5 text-muted-foreground/40" />
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <h3 className="font-bold text-foreground text-sm leading-tight">{p.name}</h3>
+                    {p.description && <p className="text-xs text-muted-foreground truncate">{p.description}</p>}
+                  </div>
+                </div>
+
+                <div className="mb-5 mt-auto">
+                  <span className="text-3xl font-black text-foreground">${(p.priceCents / 100).toFixed(2)}</span>
+                  <span className="text-sm text-muted-foreground ml-1">USDT</span>
+                </div>
+
+                <div className="flex items-center justify-between mb-4 text-xs text-muted-foreground">
+                  <div className="flex items-center gap-1.5">
+                    <Zap className="w-3.5 h-3.5 text-primary" />
+                    <span>Instant delivery</span>
+                  </div>
+                  {p.stock === 0 && <span className="text-red-500 font-medium">Out of stock</span>}
+                </div>
+
+                <Button
+                  className="w-full gap-2"
+                  onClick={() => setCustomPurchaseTarget(p)}
+                  disabled={p.stock === 0}
+                  data-testid={`button-buy-custom-${p.id}`}
+                >
+                  {p.stock === 0 ? "Out of Stock" : "Buy Now"}
+                  {p.stock > 0 && <ArrowRight className="w-3.5 h-3.5" />}
+                </Button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* ── Features ──────────────────────────────────────────────────────── */}
       <section className="border-t border-border bg-muted/20">

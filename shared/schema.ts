@@ -50,8 +50,6 @@ export const depositRequests = pgTable("deposit_requests", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
   expiresAt: timestamp("expires_at").notNull(),
 }, (table) => ({
-  // Partial unique index: no two active pending deposits can share (network, amount_usdt)
-  // This enforces the unique micro-amount identification even under concurrent requests.
   uniqPendingDepositAmount: uniqueIndex("uniq_pending_deposit_amount")
     .on(table.network, table.amountUsdt)
     .where(sql`${table.status} = 'pending'`),
@@ -71,6 +69,40 @@ export const inventoryKeys = pgTable("inventory_keys", {
   planStatusIdx: index("idx_inventory_keys_plan_status").on(table.plan, table.status),
 }));
 
+// ── Custom Products (admin-managed, e.g. LinkedIn vouchers) ──────────────────
+export const customProducts = pgTable("custom_products", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  description: text("description").notNull().default(""),
+  priceCents: integer("price_cents").notNull(),
+  logoData: text("logo_data"),          // base64 data URL or external URL
+  active: integer("active").notNull().default(1),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const customVouchers = pgTable("custom_vouchers", {
+  id: serial("id").primaryKey(),
+  productId: integer("product_id").notNull().references(() => customProducts.id),
+  code: text("code").notNull(),
+  status: text("status").notNull().default("available"),
+  soldTo: integer("sold_to").references(() => users.id),
+  soldAt: timestamp("sold_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// ── Announcement popup config (admin-controlled) ─────────────────────────────
+export const announcementConfig = pgTable("announcement_config", {
+  id: serial("id").primaryKey(),
+  title: text("title").notNull().default(""),
+  body: text("body").notNull().default(""),
+  ctaText: text("cta_text").notNull().default(""),
+  ctaUrl: text("cta_url").notNull().default(""),
+  logoData: text("logo_data"),          // base64 data URL or external URL
+  isActive: integer("is_active").notNull().default(0),
+  version: integer("version").notNull().default(1),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true, balanceCents: true, role: true });
 export const insertOrderSchema = createInsertSchema(orders).omit({ id: true, createdAt: true });
 export const insertDepositSchema = createInsertSchema(depositRequests).omit({ id: true, createdAt: true });
@@ -82,3 +114,6 @@ export type Order = typeof orders.$inferSelect;
 export type Transaction = typeof transactions.$inferSelect;
 export type DepositRequest = typeof depositRequests.$inferSelect;
 export type InventoryKey = typeof inventoryKeys.$inferSelect;
+export type CustomProduct = typeof customProducts.$inferSelect;
+export type CustomVoucher = typeof customVouchers.$inferSelect;
+export type AnnouncementConfig = typeof announcementConfig.$inferSelect;
