@@ -232,8 +232,8 @@ async function requireApiKey(req: Request, res: Response, next: NextFunction) {
       return res.status(401).json({ success: false, error: "invalid_api_key", message: "API key not found or has been revoked." });
     }
     await db.update(apiKeys).set({ lastUsedAt: new Date() }).where(eq(apiKeys.id, key.id));
-    (req as any).apiKeyUserId = key.userId;
-    (req as any).apiKeyId = key.id;
+    res.locals.apiKeyUserId = key.userId;
+    res.locals.apiKeyId = key.id;
     next();
   } catch (err) {
     console.error("API key auth error:", err);

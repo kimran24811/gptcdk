@@ -26,7 +26,7 @@ export function PageLayout({
     { href: "/batch", label: "Batch Check", icon: List },
     { href: "/shop", label: "Shop", icon: ShoppingBag },
     ...(user ? [{ href: "/account", label: "Account", icon: User }] : []),
-    { href: "/developers", label: "API", icon: Code2 },
+    { href: "/developers", label: "Developers", icon: Code2 },
     ...(isAdmin ? [{ href: "/admin", label: "Admin", icon: LayoutDashboard }] : []),
   ];
 
