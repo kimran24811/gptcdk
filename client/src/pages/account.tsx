@@ -8,11 +8,11 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { QRCodeSVG } from "qrcode.react";
 import { SiWhatsapp } from "react-icons/si";
-import { Wallet, Package, Copy, Check, ChevronDown, ChevronUp, Zap, Loader2, Plus, AlertCircle, CheckCircle2, Clock, ArrowLeft } from "lucide-react";
+import { Wallet, Package, Copy, Check, ChevronDown, ChevronUp, Zap, Loader2, Plus, AlertCircle, CheckCircle2, Clock, ArrowLeft, Key, Trash2, Code2, ExternalLink } from "lucide-react";
 import type { Order } from "@shared/schema";
 
 const WHATSAPP = "+447577308067";
@@ -414,6 +414,227 @@ function OrderRow({ order }: { order: Order }) {
   );
 }
 
+interface ApiKeyRow {
+  id: number;
+  name: string;
+  keyPrefix: string;
+  active: number;
+  lastUsedAt: string | null;
+  createdAt: string;
+}
+
+function CreateApiKeyDialog({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (key: string) => void }) {
+  const { toast } = useToast();
+  const [name, setName] = useState("");
+
+  const create = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/me/api-keys", { name });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      if (data.success) {
+        queryClient.invalidateQueries({ queryKey: ["/api/me/api-keys"] });
+        onClose();
+        setName("");
+        onCreated(data.key);
+      } else {
+        toast({ title: "Error", description: data.message, variant: "destructive" });
+      }
+    },
+    onError: () => toast({ title: "Error", description: "Could not create API key.", variant: "destructive" }),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) { onClose(); setName(""); } }}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Create API Key</DialogTitle>
+          <DialogDescription className="text-xs">Give your key a name so you can identify it later.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 pt-1">
+          <div>
+            <label className="text-sm font-medium text-foreground block mb-1.5">Key name</label>
+            <Input
+              placeholder="e.g. My Bot, Production, Test"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && name.trim() && create.mutate()}
+              data-testid="input-apikey-name"
+            />
+          </div>
+          <Button
+            className="w-full"
+            disabled={!name.trim() || create.isPending}
+            onClick={() => create.mutate()}
+            data-testid="button-create-apikey"
+          >
+            {create.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+            Generate Key
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function NewKeyRevealDialog({ apiKey, onClose }: { apiKey: string | null; onClose: () => void }) {
+  const { copied, copy } = useCopied(3000);
+  return (
+    <Dialog open={!!apiKey} onOpenChange={(v) => { if (!v) onClose(); }}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <CheckCircle2 className="w-5 h-5 text-primary" />
+            API Key Created
+          </DialogTitle>
+          <DialogDescription className="text-xs text-amber-500 dark:text-amber-400 font-medium">
+            Copy this key now. You will not be able to see it again.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 pt-1">
+          <div className="p-3 rounded-lg border border-primary/30 bg-primary/5 font-mono text-xs break-all text-foreground" data-testid="text-new-apikey">
+            {apiKey}
+          </div>
+          <Button
+            className="w-full gap-2"
+            onClick={() => copy(apiKey!)}
+            data-testid="button-copy-new-apikey"
+          >
+            {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+            {copied ? "Copied!" : "Copy API Key"}
+          </Button>
+          <button
+            onClick={onClose}
+            className="w-full text-xs text-muted-foreground hover:text-foreground transition-colors py-1"
+            data-testid="button-close-apikey-reveal"
+          >
+            I've saved it, close
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ApiKeysSection({ userId }: { userId: number }) {
+  const { toast } = useToast();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [newKey, setNewKey] = useState<string | null>(null);
+  const [revokeTarget, setRevokeTarget] = useState<ApiKeyRow | null>(null);
+
+  const { data, isLoading } = useQuery<{ success: boolean; data: ApiKeyRow[] }>({
+    queryKey: ["/api/me/api-keys"],
+    enabled: !!userId,
+  });
+
+  const revoke = useMutation({
+    mutationFn: async (id: number) => {
+      const res = await apiRequest("DELETE", `/api/me/api-keys/${id}`);
+      return res.json();
+    },
+    onSuccess: (data) => {
+      if (data.success) {
+        queryClient.invalidateQueries({ queryKey: ["/api/me/api-keys"] });
+        setRevokeTarget(null);
+        toast({ title: "Key revoked", description: "The API key has been deactivated." });
+      } else {
+        toast({ title: "Error", description: data.message, variant: "destructive" });
+      }
+    },
+    onError: () => toast({ title: "Error", description: "Could not revoke key.", variant: "destructive" }),
+  });
+
+  const keys = data?.data ?? [];
+
+  return (
+    <div>
+      <CreateApiKeyDialog open={createOpen} onClose={() => setCreateOpen(false)} onCreated={(k) => setNewKey(k)} />
+      <NewKeyRevealDialog apiKey={newKey} onClose={() => setNewKey(null)} />
+
+      {/* Revoke confirm dialog */}
+      <Dialog open={!!revokeTarget} onOpenChange={(v) => { if (!v) setRevokeTarget(null); }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Revoke API Key</DialogTitle>
+            <DialogDescription>Are you sure you want to revoke <span className="font-semibold text-foreground">"{revokeTarget?.name}"</span>? Any app using this key will stop working immediately.</DialogDescription>
+          </DialogHeader>
+          <div className="flex gap-2 pt-2">
+            <Button variant="outline" className="flex-1" onClick={() => setRevokeTarget(null)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              className="flex-1"
+              onClick={() => revokeTarget && revoke.mutate(revokeTarget.id)}
+              disabled={revoke.isPending}
+              data-testid="button-confirm-revoke-apikey"
+            >
+              {revoke.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+              Revoke Key
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <Code2 className="w-4 h-4 text-primary" />
+          <h2 className="text-base font-semibold text-foreground">API Keys</h2>
+        </div>
+        <div className="flex items-center gap-2">
+          <a href="/developers" className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors" data-testid="link-api-docs">
+            <ExternalLink className="w-3 h-3" />
+            Docs
+          </a>
+          <Button size="sm" onClick={() => setCreateOpen(true)} className="gap-1.5 h-8 text-xs" data-testid="button-new-apikey">
+            <Plus className="w-3.5 h-3.5" />
+            New Key
+          </Button>
+        </div>
+      </div>
+
+      {isLoading ? (
+        <div className="flex items-center justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>
+      ) : keys.length === 0 ? (
+        <Card className="border border-card-border">
+          <CardContent className="p-6 text-center">
+            <Key className="w-8 h-8 text-muted-foreground/40 mx-auto mb-2" />
+            <p className="text-sm text-muted-foreground font-medium">No API keys yet</p>
+            <p className="text-xs text-muted-foreground mt-1 mb-3">Generate a key to access the public API</p>
+            <Button size="sm" variant="outline" onClick={() => setCreateOpen(true)} data-testid="button-create-first-apikey">Create API Key</Button>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-2">
+          {keys.map((k) => (
+            <div key={k.id} className="flex items-center gap-3 p-3 rounded-lg border border-border bg-muted/10" data-testid={`row-apikey-${k.id}`}>
+              <div className="w-7 h-7 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
+                <Key className="w-3.5 h-3.5 text-primary" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-foreground">{k.name}</div>
+                <div className="text-xs text-muted-foreground font-mono">{k.keyPrefix}••••••••••••••••••••••••••</div>
+              </div>
+              <div className="text-right shrink-0 mr-1">
+                <div className="text-xs text-muted-foreground">
+                  {k.lastUsedAt ? `Used ${new Date(k.lastUsedAt).toLocaleDateString("en-GB")}` : "Never used"}
+                </div>
+              </div>
+              <button
+                onClick={() => setRevokeTarget(k)}
+                className="p-1.5 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors shrink-0"
+                title="Revoke key"
+                data-testid={`button-revoke-apikey-${k.id}`}
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AccountPage() {
   const [, navigate] = useLocation();
   const { user, isLoading } = useAuth();
@@ -493,6 +714,9 @@ export default function AccountPage() {
             </div>
           </CardContent>
         </Card>
+
+        {/* API Keys */}
+        <ApiKeysSection userId={user.id} />
 
         {/* Orders */}
         <div>

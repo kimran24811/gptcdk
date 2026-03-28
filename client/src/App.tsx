@@ -12,6 +12,7 @@ import LoginPage from "@/pages/login";
 import RegisterPage from "@/pages/register";
 import AccountPage from "@/pages/account";
 import AdminPage from "@/pages/admin";
+import DevelopersPage from "@/pages/developers";
 import { Dialog, DialogContentRaw, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { ThemeProvider } from "@/components/theme-provider";
 
@@ -117,6 +118,7 @@ function Router() {
       <Route path="/register" component={RegisterPage} />
       <Route path="/account" component={AccountPage} />
       <Route path="/admin" component={AdminPage} />
+      <Route path="/developers" component={DevelopersPage} />
       <Route component={NotFound} />
     </Switch>
   );

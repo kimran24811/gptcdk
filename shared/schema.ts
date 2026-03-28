@@ -90,6 +90,18 @@ export const customVouchers = pgTable("custom_vouchers", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
+// ── API Keys (user-generated for public API access) ──────────────────────────
+export const apiKeys = pgTable("api_keys", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().references(() => users.id),
+  name: text("name").notNull(),
+  keyHash: text("key_hash").notNull().unique(),
+  keyPrefix: text("key_prefix").notNull(),
+  active: integer("active").notNull().default(1),
+  lastUsedAt: timestamp("last_used_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
 // ── Announcement popup config (admin-controlled) ─────────────────────────────
 export const announcementConfig = pgTable("announcement_config", {
   id: serial("id").primaryKey(),
@@ -117,3 +129,4 @@ export type InventoryKey = typeof inventoryKeys.$inferSelect;
 export type CustomProduct = typeof customProducts.$inferSelect;
 export type CustomVoucher = typeof customVouchers.$inferSelect;
 export type AnnouncementConfig = typeof announcementConfig.$inferSelect;
+export type ApiKey = typeof apiKeys.$inferSelect;

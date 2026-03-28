@@ -2,7 +2,7 @@ import { useLocation } from "wouter";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SiWhatsapp } from "react-icons/si";
-import { Zap, List, ShoppingBag, Sun, Moon, User, LayoutDashboard, LogOut, LogIn } from "lucide-react";
+import { Zap, List, ShoppingBag, Sun, Moon, User, LayoutDashboard, LogOut, LogIn, Code2 } from "lucide-react";
 import { useTheme } from "@/components/theme-provider";
 import { useAuth } from "@/hooks/use-auth";
 
@@ -26,6 +26,7 @@ export function PageLayout({
     { href: "/batch", label: "Batch Check", icon: List },
     { href: "/shop", label: "Shop", icon: ShoppingBag },
     ...(user ? [{ href: "/account", label: "Account", icon: User }] : []),
+    { href: "/developers", label: "API", icon: Code2 },
     ...(isAdmin ? [{ href: "/admin", label: "Admin", icon: LayoutDashboard }] : []),
   ];
 

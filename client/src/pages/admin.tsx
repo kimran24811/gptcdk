@@ -1536,6 +1536,73 @@ function PopupEditorDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
+// ── API Keys tab ─────────────────────────────────────────────────────────────
+interface AdminApiKeyRow {
+  id: number;
+  name: string;
+  keyPrefix: string;
+  active: number;
+  lastUsedAt: string | null;
+  createdAt: string;
+  userId: number;
+  userEmail: string;
+  userName: string;
+}
+
+function AdminApiKeysTab() {
+  const { data, isLoading } = useQuery<{ success: boolean; data: AdminApiKeyRow[] }>({
+    queryKey: ["/api/admin/api-keys"],
+  });
+  const keys = data?.data ?? [];
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h2 className="text-base font-semibold text-foreground">Active API Keys</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">All customer-generated API keys</p>
+        </div>
+        <Badge variant="secondary">{keys.length} active</Badge>
+      </div>
+      {isLoading ? (
+        <div className="flex items-center justify-center py-10"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>
+      ) : keys.length === 0 ? (
+        <Card className="border border-card-border">
+          <CardContent className="p-8 text-center">
+            <Key className="w-10 h-10 text-muted-foreground/40 mx-auto mb-3" />
+            <p className="text-sm text-muted-foreground">No API keys have been generated yet.</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-2">
+          {keys.map((k) => (
+            <div key={k.id} className="flex items-center gap-3 p-3.5 rounded-lg border border-border bg-muted/10" data-testid={`row-apikey-${k.id}`}>
+              <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                <Key className="w-4 h-4 text-primary" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium text-foreground">{k.name}</div>
+                <div className="text-xs text-muted-foreground font-mono">{k.keyPrefix}…</div>
+                <div className="text-xs text-muted-foreground mt-0.5">
+                  {k.userName} · {k.userEmail}
+                </div>
+              </div>
+              <div className="text-right shrink-0">
+                <div className="text-xs text-muted-foreground">
+                  {k.lastUsedAt ? `Last used ${new Date(k.lastUsedAt).toLocaleDateString("en-GB")}` : "Never used"}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Created {new Date(k.createdAt).toLocaleDateString("en-GB")}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Products tab ─────────────────────────────────────────────────────────────
 function ProductsTab() {
   const { toast } = useToast();
@@ -1666,7 +1733,7 @@ function ProductsTab() {
 export default function AdminPage() {
   const [, navigate] = useLocation();
   const { user, isAdmin, isLoading } = useAuth();
-  const [tab, setTab] = useState<"customers" | "orders" | "deposits" | "inventory" | "products" | "settings">("customers");
+  const [tab, setTab] = useState<"customers" | "orders" | "deposits" | "inventory" | "products" | "api-keys" | "settings">("customers");
   const [balanceTarget, setBalanceTarget] = useState<{ customer: Customer; mode: "credit" | "debit" } | null>(null);
   const [ordersTarget, setOrdersTarget] = useState<Customer | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Customer | null>(null);
@@ -1756,7 +1823,7 @@ export default function AdminPage() {
 
       {/* Tabs */}
       <div className="flex gap-1 mb-5 border-b border-border overflow-x-auto">
-        {(["customers", "orders", "deposits", "inventory", "products", "settings"] as const).map((t) => (
+        {(["customers", "orders", "deposits", "inventory", "products", "api-keys", "settings"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -1768,7 +1835,8 @@ export default function AdminPage() {
             {t === "settings" && <Settings className="w-3.5 h-3.5" />}
             {t === "deposits" && <ArrowDownToLine className="w-3.5 h-3.5" />}
             {t === "inventory" && <Key className="w-3.5 h-3.5" />}
-            {t === "deposits" ? "Deposits" : t === "settings" ? "Settings" : t === "inventory" ? "Keys" : t.charAt(0).toUpperCase() + t.slice(1)}
+            {t === "api-keys" && <Key className="w-3.5 h-3.5" />}
+            {t === "deposits" ? "Deposits" : t === "settings" ? "Settings" : t === "inventory" ? "Keys" : t === "api-keys" ? "API Keys" : t.charAt(0).toUpperCase() + t.slice(1)}
           </button>
         ))}
       </div>
@@ -1917,6 +1985,9 @@ export default function AdminPage() {
 
       {/* Products tab */}
       {tab === "products" && <ProductsTab />}
+
+      {/* API Keys tab */}
+      {tab === "api-keys" && <AdminApiKeysTab />}
 
       {/* Settings tab */}
       {tab === "settings" && <SettingsTab user={user} />}

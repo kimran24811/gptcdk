@@ -3,7 +3,8 @@ import { createServer, type Server } from "http";
 import bcrypt from "bcrypt";
 import { eq, desc, and, ne, sql, inArray, lt } from "drizzle-orm";
 import { db } from "./storage";
-import { users, transactions, orders, depositRequests, inventoryKeys, customProducts, customVouchers, announcementConfig } from "@shared/schema";
+import { users, transactions, orders, depositRequests, inventoryKeys, customProducts, customVouchers, announcementConfig, apiKeys } from "@shared/schema";
+import crypto from "crypto";
 
 const USDT_BEP20_ADDRESS = process.env.USDT_BEP20_ADDRESS || "0x0c31c91ec2cbb607aeca28c1bc09c55352db2fea";
 const USDT_TRC20_ADDRESS = process.env.USDT_TRC20_ADDRESS || "TLUSXogZfhgWGHpTBHNtNQPanq6AvNfCY4";
@@ -184,6 +185,60 @@ async function warmPricingCache(): Promise<void> {
     await fetchAndCachePricing(planId).catch(() => {});
   }
   console.log("[pricing] cache warmed for all plans");
+}
+
+// ── API Key helpers ───────────────────────────────────
+function generateApiKey(): { raw: string; hash: string; prefix: string } {
+  const raw = "sk_live_" + crypto.randomBytes(24).toString("hex");
+  const hash = crypto.createHash("sha256").update(raw).digest("hex");
+  const prefix = raw.slice(0, 16);
+  return { raw, hash, prefix };
+}
+
+function hashApiKey(raw: string): string {
+  return crypto.createHash("sha256").update(raw).digest("hex");
+}
+
+// ── In-memory rate limiter (60 req/min per API key hash) ─────────────────────
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+function checkRateLimit(keyHash: string): boolean {
+  const now = Date.now();
+  const entry = rateLimitMap.get(keyHash);
+  if (!entry || now > entry.resetAt) {
+    rateLimitMap.set(keyHash, { count: 1, resetAt: now + 60_000 });
+    return true;
+  }
+  if (entry.count >= 60) return false;
+  entry.count++;
+  return true;
+}
+
+async function requireApiKey(req: Request, res: Response, next: NextFunction) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ success: false, error: "missing_api_key", message: "Provide your API key via: Authorization: Bearer sk_live_..." });
+  }
+  const raw = authHeader.slice(7).trim();
+  if (!raw.startsWith("sk_live_")) {
+    return res.status(401).json({ success: false, error: "invalid_api_key", message: "Invalid API key format." });
+  }
+  const hash = hashApiKey(raw);
+  if (!checkRateLimit(hash)) {
+    return res.status(429).json({ success: false, error: "rate_limit_exceeded", message: "Rate limit exceeded. Maximum 60 requests per minute." });
+  }
+  try {
+    const [key] = await db.select().from(apiKeys).where(and(eq(apiKeys.keyHash, hash), eq(apiKeys.active, 1)));
+    if (!key) {
+      return res.status(401).json({ success: false, error: "invalid_api_key", message: "API key not found or has been revoked." });
+    }
+    await db.update(apiKeys).set({ lastUsedAt: new Date() }).where(eq(apiKeys.id, key.id));
+    (req as any).apiKeyUserId = key.userId;
+    (req as any).apiKeyId = key.id;
+    next();
+  } catch (err) {
+    console.error("API key auth error:", err);
+    return res.status(500).json({ success: false, error: "server_error", message: "Authentication failed. Please try again." });
+  }
 }
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
@@ -526,6 +581,146 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // ── API Key management (account) ─────────────────────
+
+  app.get("/api/me/api-keys", requireAuth, async (req, res) => {
+    try {
+      const keys = await db.select({
+        id: apiKeys.id,
+        name: apiKeys.name,
+        keyPrefix: apiKeys.keyPrefix,
+        active: apiKeys.active,
+        lastUsedAt: apiKeys.lastUsedAt,
+        createdAt: apiKeys.createdAt,
+      }).from(apiKeys)
+        .where(and(eq(apiKeys.userId, req.session.userId!), eq(apiKeys.active, 1)))
+        .orderBy(desc(apiKeys.createdAt));
+      return res.json({ success: true, data: keys });
+    } catch (err) {
+      console.error("API keys fetch error:", err);
+      return res.status(500).json({ success: false, message: "Could not fetch API keys." });
+    }
+  });
+
+  app.post("/api/me/api-keys", requireAuth, async (req, res) => {
+    const { name } = req.body;
+    if (!name || typeof name !== "string" || name.trim().length === 0) {
+      return res.json({ success: false, message: "API key name is required." });
+    }
+    try {
+      const existing = await db.select({ id: apiKeys.id }).from(apiKeys)
+        .where(and(eq(apiKeys.userId, req.session.userId!), eq(apiKeys.active, 1)));
+      if (existing.length >= 10) {
+        return res.json({ success: false, message: "Maximum 10 active API keys allowed. Revoke one to create a new one." });
+      }
+      const { raw, hash, prefix } = generateApiKey();
+      await db.insert(apiKeys).values({
+        userId: req.session.userId!,
+        name: name.trim(),
+        keyHash: hash,
+        keyPrefix: prefix,
+        active: 1,
+      });
+      return res.json({ success: true, key: raw, prefix });
+    } catch (err) {
+      console.error("API key create error:", err);
+      return res.status(500).json({ success: false, message: "Could not create API key." });
+    }
+  });
+
+  app.delete("/api/me/api-keys/:id", requireAuth, async (req, res) => {
+    const keyId = parseInt(req.params.id, 10);
+    try {
+      const [key] = await db.select().from(apiKeys)
+        .where(and(eq(apiKeys.id, keyId), eq(apiKeys.userId, req.session.userId!)));
+      if (!key) return res.json({ success: false, message: "API key not found." });
+      await db.update(apiKeys).set({ active: 0 }).where(eq(apiKeys.id, keyId));
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("API key revoke error:", err);
+      return res.status(500).json({ success: false, message: "Could not revoke API key." });
+    }
+  });
+
+  // ── Public API v1 ─────────────────────────────────────
+
+  app.post("/api/v1/check", requireApiKey, async (req, res) => {
+    const { key } = req.body;
+    if (!key || typeof key !== "string" || key.trim().length === 0) {
+      return res.status(400).json({ success: false, error: "missing_key", message: "The 'key' field is required." });
+    }
+    try {
+      const data = await apiCall("GET", `/key/${encodeURIComponent(key.trim())}/status`);
+      if (!data.success) {
+        const msg = data.error === "key_not_found" ? "Key not found or not available." : data.message || "Invalid key.";
+        return res.json({ success: false, error: data.error || "key_not_found", message: msg });
+      }
+      const keyData = data.data;
+      if (keyData.status === "available") {
+        return res.json({ success: true, status: "available", type: keyData.subscription || "Plus CDK" });
+      } else if (keyData.status === "used" || keyData.status === "activated") {
+        return res.json({
+          success: true,
+          status: "used",
+          message: "This key has already been activated.",
+          activatedFor: keyData.activated_for ?? keyData.used_by ?? keyData.email ?? null,
+          activatedAt: keyData.activated_at ?? keyData.used_at ?? null,
+        });
+      } else if (keyData.status === "expired") {
+        return res.json({ success: true, status: "expired", message: "This key has expired." });
+      }
+      return res.json({ success: false, error: "unavailable", message: "Key is not available." });
+    } catch (err) {
+      console.error("API v1 check error:", err);
+      return res.status(500).json({ success: false, error: "server_error", message: "Key check service unavailable. Please try again." });
+    }
+  });
+
+  app.post("/api/v1/redeem", requireApiKey, async (req, res) => {
+    const { key: cdkKey, session } = req.body;
+    if (!cdkKey || typeof cdkKey !== "string" || cdkKey.trim().length === 0) {
+      return res.status(400).json({ success: false, error: "missing_key", message: "The 'key' field is required." });
+    }
+    if (!session || typeof session !== "string" || session.trim().length === 0) {
+      return res.status(400).json({ success: false, error: "missing_session", message: "The 'session' field is required (ChatGPT session JSON or access token)." });
+    }
+    try {
+      const rawSession = session.trim();
+      let accessToken: string = rawSession;
+      try {
+        const parsed = JSON.parse(rawSession);
+        if (parsed && typeof parsed === "object") {
+          accessToken = parsed.accessToken || parsed.access_token || parsed.token || rawSession;
+        }
+      } catch { /* not JSON — treat as raw token */ }
+
+      let data = await apiCall("POST", "/activate", { key: cdkKey.trim(), user_token: rawSession });
+      if (!data.success && data.error === "token_invalid") {
+        data = await apiCall("POST", "/activate", { key: cdkKey.trim(), user_token: accessToken });
+      }
+      if (data.success) {
+        return res.json({
+          success: true,
+          email: data.data?.email,
+          product: data.data?.product,
+          subscription: data.data?.subscription,
+          activatedAt: data.data?.activated_at,
+        });
+      }
+      const errorMessages: Record<string, string> = {
+        key_not_found: "Key not found or not available.",
+        activation_failed: "Activation failed. Please check your session data and try again.",
+        token_invalid: "Token validation failed. Please provide a fresh ChatGPT session.",
+        rate_limit_exceeded: "Too many activation requests. Please wait and try again.",
+      };
+      const msg = errorMessages[data.error] || data.message || "Activation failed.";
+      return res.json({ success: false, error: data.error || "activation_failed", message: msg });
+    } catch (err) {
+      console.error("API v1 redeem error:", err);
+      return res.status(500).json({ success: false, error: "server_error", message: "Activation service unavailable. Please try again." });
+    }
+  });
+
   // ── Admin routes ─────────────────────────────────────
 
   app.get("/api/admin/customers", requireAdmin, async (_req, res) => {
@@ -677,6 +872,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (err) {
       console.error("Admin orders error:", err);
       return res.status(500).json({ success: false, message: "Could not fetch orders." });
+    }
+  });
+
+  // ── Admin API keys view ───────────────────────────────
+
+  app.get("/api/admin/api-keys", requireAdmin, async (_req, res) => {
+    try {
+      const keys = await db.select({
+        id: apiKeys.id,
+        name: apiKeys.name,
+        keyPrefix: apiKeys.keyPrefix,
+        active: apiKeys.active,
+        lastUsedAt: apiKeys.lastUsedAt,
+        createdAt: apiKeys.createdAt,
+        userId: apiKeys.userId,
+        userEmail: users.email,
+        userName: users.name,
+      }).from(apiKeys)
+        .innerJoin(users, eq(apiKeys.userId, users.id))
+        .where(eq(apiKeys.active, 1))
+        .orderBy(desc(apiKeys.createdAt));
+      return res.json({ success: true, data: keys });
+    } catch (err) {
+      console.error("Admin API keys error:", err);
+      return res.status(500).json({ success: false, message: "Could not fetch API keys." });
     }
   });
 
