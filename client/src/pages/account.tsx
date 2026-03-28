@@ -613,10 +613,9 @@ function ApiKeysSection({ userId }: { userId: number }) {
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium text-foreground">{k.name}</div>
                 <div className="text-xs text-muted-foreground font-mono">{k.keyPrefix}••••••••••••••••••••••••••</div>
-              </div>
-              <div className="text-right shrink-0 mr-1">
-                <div className="text-xs text-muted-foreground">
-                  {k.lastUsedAt ? `Used ${new Date(k.lastUsedAt).toLocaleDateString("en-GB")}` : "Never used"}
+                <div className="text-xs text-muted-foreground mt-0.5">
+                  Created {new Date(k.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+                  {k.lastUsedAt && <span className="ml-2 opacity-70">· Last used {new Date(k.lastUsedAt).toLocaleDateString("en-GB")}</span>}
                 </div>
               </div>
               <button

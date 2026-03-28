@@ -223,13 +223,13 @@ async function requireApiKey(req: Request, res: Response, next: NextFunction) {
     return res.status(401).json({ success: false, error: "invalid_api_key", message: "Invalid API key format." });
   }
   const hash = hashApiKey(raw);
-  if (!checkRateLimit(hash)) {
-    return res.status(429).json({ success: false, error: "rate_limit_exceeded", message: "Rate limit exceeded. Maximum 60 requests per minute." });
-  }
   try {
     const [key] = await db.select().from(apiKeys).where(and(eq(apiKeys.keyHash, hash), eq(apiKeys.active, 1)));
     if (!key) {
       return res.status(401).json({ success: false, error: "invalid_api_key", message: "API key not found or has been revoked." });
+    }
+    if (!checkRateLimit(hash)) {
+      return res.status(429).json({ success: false, error: "rate_limit_exceeded", message: "Rate limit exceeded. Maximum 60 requests per minute." });
     }
     await db.update(apiKeys).set({ lastUsedAt: new Date() }).where(eq(apiKeys.id, key.id));
     res.locals.apiKeyUserId = key.userId;
