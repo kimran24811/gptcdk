@@ -805,6 +805,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await db.delete(depositRequests).where(eq(depositRequests.userId, customerId));
       await db.update(inventoryKeys).set({ soldTo: null, soldAt: null, status: "available" }).where(eq(inventoryKeys.soldTo, customerId));
       await db.delete(orders).where(eq(orders.userId, customerId));
+      await db.delete(apiKeys).where(eq(apiKeys.userId, customerId));
       await db.delete(users).where(eq(users.id, customerId));
       return res.json({ success: true });
     } catch (err) {

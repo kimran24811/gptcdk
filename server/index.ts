@@ -82,7 +82,14 @@ app.use((req, res, next) => {
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
       if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
+        const SENSITIVE_KEYS = ["key", "password", "token", "secret"];
+        const redacted = { ...capturedJsonResponse };
+        for (const k of SENSITIVE_KEYS) {
+          if (k in redacted && typeof redacted[k] === "string" && redacted[k].length > 8) {
+            redacted[k] = redacted[k].slice(0, 8) + "***";
+          }
+        }
+        logLine += ` :: ${JSON.stringify(redacted)}`;
       }
 
       log(logLine);
