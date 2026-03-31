@@ -1,7 +1,7 @@
 import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
-import { registerRoutes } from "./routes";
+import { registerRoutes, processAllPendingDeposits } from "./routes";
 import { serveStatic } from "./static";
 import { pool } from "./storage";
 import { createServer } from "http";
@@ -133,4 +133,12 @@ app.use((req, res, next) => {
       log(`serving on port ${port}`);
     },
   );
+
+  // ── Background deposit auto-processor ────────────────────────────────────
+  // Runs every 30 seconds to detect and credit pending deposits even if the
+  // user has closed their browser tab.
+  setInterval(async () => {
+    await processAllPendingDeposits();
+  }, 30_000);
+  log("Deposit auto-processor started (every 30s)", "deposit");
 })();

@@ -11,6 +11,246 @@ const USDT_TRC20_ADDRESS = process.env.USDT_TRC20_ADDRESS || "TLUSXogZfhgWGHpTBH
 const USDT_BEP20_CONTRACT = "0x55d398326f99059fF775485246999027B3197955";
 const USDT_TRC20_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 
+// ── Blockchain detection helpers ─────────────────────────────────────────────
+
+/**
+ * Verify a user-provided TRC-20 tx hash via TronGrid.
+ * Returns { ok: true } if the tx transfers enough USDT to our wallet.
+ */
+async function verifyTrc20Hash(hash: string, minSun: number): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    const url = `https://api.trongrid.io/wallet/gettransactioninfobyid`;
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Accept": "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ value: hash }),
+      signal: AbortSignal.timeout(12000),
+    });
+    if (!resp.ok) return { ok: false, reason: "notfound" };
+    const ct = resp.headers.get("content-type") ?? "";
+    if (!ct.includes("application/json")) return { ok: false, reason: "notfound" };
+    const data = await resp.json() as { log?: Array<{ address: string; data: string; topics: string[] }> };
+    if (!data?.log?.length) return { ok: false, reason: "notfound" };
+    const contractHex = "a614f803b6fd780986a42c78ec9c7f77e6ded13c";
+    const transferTopic = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+    for (const log of data.log) {
+      if (log.address?.toLowerCase() !== contractHex) continue;
+      if (!log.topics?.[0]?.toLowerCase().includes(transferTopic)) continue;
+      const amt = log.data ? parseInt(log.data, 16) : 0;
+      if (amt >= minSun) return { ok: true };
+    }
+    return { ok: false, reason: "mismatch" };
+  } catch (err) {
+    console.error("[deposit] verifyTrc20Hash error:", err);
+    return { ok: false, reason: "error" };
+  }
+}
+
+/**
+ * Verify a user-provided BEP-20 tx hash via BSCScan API.
+ * Returns { ok: true } if the tx transfers enough USDT to our wallet.
+ */
+async function verifyBep20Hash(hash: string, minWei: bigint): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    const apiKey = process.env.BSCSCAN_API_KEY || "";
+    const keyParam = apiKey ? `&apikey=${apiKey}` : "";
+    const url = `https://api.bscscan.com/api?module=proxy&action=eth_getTransactionReceipt&txhash=${hash}${keyParam}`;
+    const resp = await fetch(url, { signal: AbortSignal.timeout(12000) });
+    if (!resp.ok) return { ok: false, reason: "notfound" };
+    const data = await resp.json() as { result?: { logs?: Array<{ address: string; topics: string[]; data: string }> } };
+    const logs = data?.result?.logs;
+    if (!Array.isArray(logs)) return { ok: false, reason: "notfound" };
+    const transferTopic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+    const walletPadded = "0x000000000000000000000000" + USDT_BEP20_ADDRESS.slice(2).toLowerCase();
+    for (const log of logs) {
+      if (log.address?.toLowerCase() !== USDT_BEP20_CONTRACT.toLowerCase()) continue;
+      if (log.topics?.[0]?.toLowerCase() !== transferTopic) continue;
+      if (log.topics?.[2]?.toLowerCase() !== walletPadded) continue;
+      const amt = BigInt(log.data ?? "0x0");
+      if (amt >= minWei) return { ok: true };
+    }
+    if (!logs.some((l) => l.address?.toLowerCase() === USDT_BEP20_CONTRACT.toLowerCase())) {
+      return { ok: false, reason: "notusdt" };
+    }
+    return { ok: false, reason: "mismatch" };
+  } catch (err) {
+    console.error("[deposit] verifyBep20Hash error:", err);
+    return { ok: false, reason: "error" };
+  }
+}
+
+/**
+ * Scan recent BEP-20 USDT transfers to our wallet via BSCScan token transfer API.
+ * Returns matching txHash or null.
+ */
+async function scanBep20(amountUsdt: string): Promise<string | null> {
+  try {
+    const apiKey = process.env.BSCSCAN_API_KEY || "";
+    const keyParam = apiKey ? `&apikey=${apiKey}` : "";
+    const url = `https://api.bscscan.com/api?module=account&action=tokentx&contractaddress=${USDT_BEP20_CONTRACT}&address=${USDT_BEP20_ADDRESS}&sort=desc&page=1&offset=50${keyParam}`;
+    const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
+    if (!resp.ok) {
+      console.error("[deposit] BSCScan scan HTTP error:", resp.status, resp.statusText);
+      return null;
+    }
+    const data = await resp.json() as { status: string; result: Array<{ hash: string; value: string; tokenDecimal: string; to: string; confirmations: string }> | string };
+    if (data.status !== "1" || !Array.isArray(data.result)) {
+      if (data.status !== "0") console.error("[deposit] BSCScan scan unexpected response:", JSON.stringify(data).slice(0, 200));
+      return null;
+    }
+    // USDT BEP-20 has 18 decimals
+    const expectedWei = BigInt(Math.round(parseFloat(amountUsdt) * 10_000)) * BigInt("100000000000000");
+    for (const tx of data.result) {
+      if (tx.to?.toLowerCase() !== USDT_BEP20_ADDRESS.toLowerCase()) continue;
+      if (parseInt(tx.confirmations) < 1) continue;
+      const val = BigInt(tx.value ?? "0");
+      if (val === expectedWei) return tx.hash;
+    }
+    return null;
+  } catch (err) {
+    console.error("[deposit] BSCScan scan error:", err);
+    return null;
+  }
+}
+
+/**
+ * Scan recent TRC-20 USDT transfers to our wallet via TronGrid API (with optional API key).
+ * Falls back to Tronscan if TronGrid fails.
+ * Returns matching txHash or null.
+ */
+async function scanTrc20(amountUsdt: string): Promise<string | null> {
+  const expectedSun = Math.round(parseFloat(amountUsdt) * 1_000_000);
+
+  // ── Attempt 1: TronGrid (supports optional API key for higher rate limits) ──
+  try {
+    const apiKey = process.env.TRONGRID_API_KEY || "";
+    const headers: Record<string, string> = {
+      "Accept": "application/json",
+      "User-Agent": "ChatGPT-Recharge/1.0",
+    };
+    if (apiKey) headers["TRON-PRO-API-KEY"] = apiKey;
+
+    const url = `https://api.trongrid.io/v1/accounts/${USDT_TRC20_ADDRESS}/transactions/trc20?contract_address=${USDT_TRC20_CONTRACT}&limit=50&order_by=block_timestamp,desc&only_to=true`;
+    const resp = await fetch(url, { signal: AbortSignal.timeout(12000), headers });
+    if (resp.ok) {
+      const ct = resp.headers.get("content-type") ?? "";
+      if (ct.includes("application/json")) {
+        const data = await resp.json() as { data?: Array<{ transaction_id: string; value: string; to: string; confirmed?: boolean }> };
+        if (Array.isArray(data.data)) {
+          for (const tx of data.data) {
+            if (tx.to?.toLowerCase() !== USDT_TRC20_ADDRESS.toLowerCase()) continue;
+            const val = parseInt(tx.value ?? "0");
+            if (val === expectedSun) return tx.transaction_id;
+          }
+          return null; // TronGrid responded fine, no match found
+        }
+      }
+    }
+    console.error("[deposit] TronGrid scan HTTP error:", resp.status, resp.statusText);
+  } catch (err) {
+    console.error("[deposit] TronGrid scan error:", err);
+  }
+
+  // ── Attempt 2: Tronscan public API as fallback ────────────────────────────
+  try {
+    const url = `https://apilist.tronscan.org/api/token_trc20/transfers?toAddress=${USDT_TRC20_ADDRESS}&contract_address=${USDT_TRC20_CONTRACT}&limit=50&start=0`;
+    const resp = await fetch(url, {
+      signal: AbortSignal.timeout(12000),
+      headers: { "Accept": "application/json", "User-Agent": "ChatGPT-Recharge/1.0" },
+    });
+    if (!resp.ok) {
+      console.error("[deposit] Tronscan fallback HTTP error:", resp.status, resp.statusText);
+      return null;
+    }
+    const ct = resp.headers.get("content-type") ?? "";
+    if (!ct.includes("application/json")) {
+      console.error("[deposit] Tronscan fallback returned non-JSON");
+      return null;
+    }
+    const data = await resp.json() as { token_transfers?: Array<{ transaction_id: string; quant: string; to_address: string; confirmed: boolean }> };
+    if (!Array.isArray(data.token_transfers)) return null;
+    for (const tx of data.token_transfers) {
+      if (tx.to_address?.toLowerCase() !== USDT_TRC20_ADDRESS.toLowerCase()) continue;
+      if (!tx.confirmed) continue;
+      const val = parseInt(tx.quant ?? "0");
+      if (val === expectedSun) return tx.transaction_id;
+    }
+    return null;
+  } catch (err) {
+    console.error("[deposit] Tronscan fallback scan error:", err);
+    return null;
+  }
+}
+
+/**
+ * Credit a deposit atomically — marks it completed, increments user balance,
+ * and logs the transaction. Returns new balanceCents, or null if already processed.
+ */
+async function creditDeposit(depositId: number, txHash: string): Promise<number | null> {
+  return db.transaction(async (tx) => {
+    const [txUsed] = await tx.select({ id: depositRequests.id })
+      .from(depositRequests)
+      .where(and(eq(depositRequests.txHash, txHash), eq(depositRequests.status, "completed")))
+      .limit(1);
+    if (txUsed) return null;
+
+    const [dep] = await tx.select().from(depositRequests)
+      .where(and(eq(depositRequests.id, depositId), eq(depositRequests.status, "pending")))
+      .limit(1);
+    if (!dep) return null;
+
+    await tx.update(depositRequests)
+      .set({ status: "completed", txHash })
+      .where(eq(depositRequests.id, depositId));
+
+    const [updatedUser] = await tx.update(users)
+      .set({ balanceCents: sql`balance_cents + ${dep.amountCents}` })
+      .where(eq(users.id, dep.userId))
+      .returning({ balanceCents: users.balanceCents });
+
+    await tx.insert(transactions).values({
+      userId: dep.userId,
+      amountCents: dep.amountCents,
+      type: "credit",
+      description: `USDT top-up via ${dep.network.toUpperCase()} — ${dep.amountUsdt} USDT`,
+      createdBy: dep.userId,
+    });
+
+    return updatedUser?.balanceCents ?? null;
+  });
+}
+
+/**
+ * Background auto-processor: exported so server/index.ts can call it on startup.
+ * Scans all pending, non-expired deposits and credits them if payment is found.
+ */
+export async function processAllPendingDeposits(): Promise<void> {
+  try {
+    const now = new Date();
+    const pending = await db.select().from(depositRequests)
+      .where(and(eq(depositRequests.status, "pending"), sql`expires_at > ${now}`));
+    if (pending.length === 0) return;
+
+    for (const dep of pending) {
+      try {
+        const txHash = dep.network === "bep20"
+          ? await scanBep20(dep.amountUsdt)
+          : await scanTrc20(dep.amountUsdt);
+        if (txHash) {
+          const newBalance = await creditDeposit(dep.id, txHash);
+          if (newBalance !== null) {
+            console.log(`[deposit] Auto-credited deposit #${dep.id} (${dep.amountUsdt} USDT ${dep.network.toUpperCase()}) → user ${dep.userId}, new balance: ${newBalance} cents`);
+          }
+        }
+      } catch (err) {
+        console.error(`[deposit] Background check failed for deposit #${dep.id}:`, err);
+      }
+    }
+  } catch (err) {
+    console.error("[deposit] processAllPendingDeposits error:", err);
+  }
+}
+
 const CDK_API_KEY = process.env.CDK_API_KEY || "";
 const API_BASE = "https://keys.ovh/api/v1";
 
@@ -986,234 +1226,65 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.json({ success: false, message: "Deposit request not found." });
       }
       if (deposit.status === "completed") {
-        return res.json({ success: true, status: "completed" });
+        const [u] = await db.select({ balanceCents: users.balanceCents }).from(users).where(eq(users.id, deposit.userId));
+        return res.json({ success: true, status: "completed", balanceCents: u?.balanceCents ?? null });
       }
       if (new Date() > deposit.expiresAt) {
         await db.update(depositRequests).set({ status: "expired" }).where(eq(depositRequests.id, depositId));
         return res.json({ success: false, status: "expired", message: "This deposit request has expired." });
       }
 
-      const since = deposit.createdAt.getTime() - 60000;
-      const expectedAmountTrc20 = Math.round(parseFloat(deposit.amountUsdt) * 1_000_000);      // 6 decimals
-      const expectedWei = BigInt(Math.round(parseFloat(deposit.amountUsdt) * 10_000)) * BigInt("100000000000000"); // 18 decimals
+      const minSun = deposit.amountCents * 9500;
+      const minWei = BigInt(deposit.amountCents) * BigInt("9500000000000000");
       let found = false;
       let txHash: string | null = null;
 
-      // Minimum accepted amount: 95% of the deposit's dollar value (to allow round-number sends)
-      // TRC-20: 1 cent = 10,000 sun (6 decimals). 95% → amountCents * 9500
-      const minSun = deposit.amountCents * 9500;
-      // BEP-20: 1 cent = 10^16 wei (18 decimals). 95% → amountCents * 9_500_000_000_000_000
-      const minWei = BigInt(deposit.amountCents) * BigInt("9500000000000000");
-
-      // ── Helper: verify a user-provided TRC-20 tx hash directly ──────────────
-      async function verifyTrc20Hash(hash: string): Promise<{ ok: boolean; reason?: string }> {
-        const url = `https://api.trongrid.io/wallet/gettransactioninfobyid`;
-        const resp = await fetch(url, {
-          method: "POST",
-          headers: { "Accept": "application/json", "Content-Type": "application/json" },
-          body: JSON.stringify({ value: hash }),
-          signal: AbortSignal.timeout(12000),
-        });
-        if (!resp.ok) return { ok: false, reason: "notfound" };
-        const ct = resp.headers.get("content-type") ?? "";
-        if (!ct.includes("application/json")) return { ok: false, reason: "notfound" };
-        const data = await resp.json() as { log?: Array<{ address: string; data: string; topics: string[] }> };
-        if (!data?.log?.length) return { ok: false, reason: "notfound" };
-        const contractHex = "a614f803b6fd780986a42c78ec9c7f77e6ded13c";
-        const transferTopic = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
-        for (const log of data.log) {
-          if (log.address?.toLowerCase() !== contractHex) continue;
-          if (!log.topics?.[0]?.toLowerCase().includes(transferTopic)) continue;
-          const amt = log.data ? parseInt(log.data, 16) : 0;
-          // Accept if amount >= 95% of deposit dollar value
-          if (amt >= minSun) return { ok: true };
-        }
-        // Found USDT Transfer logs but none going to our wallet with enough amount
-        return { ok: false, reason: "mismatch" };
-      }
-
-      // ── Helper: verify a user-provided BEP-20 tx hash directly ──────────────
-      async function verifyBep20Hash(hash: string): Promise<{ ok: boolean; reason?: string }> {
-        const bscRpc = "https://bsc-dataseed1.binance.org/";
-        const resp = await fetch(bscRpc, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ jsonrpc: "2.0", method: "eth_getTransactionReceipt", params: [hash], id: 1 }),
-          signal: AbortSignal.timeout(12000),
-        });
-        if (!resp.ok) return { ok: false, reason: "notfound" };
-        const data = await resp.json() as { result?: { logs?: Array<{ address: string; topics: string[]; data: string }> } };
-        const logs = data?.result?.logs;
-        if (!Array.isArray(logs)) return { ok: false, reason: "notfound" };
-        const transferTopic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
-        const walletPadded = "0x000000000000000000000000" + USDT_BEP20_ADDRESS.slice(2).toLowerCase();
-        for (const log of logs) {
-          if (log.address?.toLowerCase() !== USDT_BEP20_CONTRACT.toLowerCase()) continue;
-          if (log.topics?.[0]?.toLowerCase() !== transferTopic) continue;
-          if (log.topics?.[2]?.toLowerCase() !== walletPadded) continue;
-          const amt = BigInt(log.data ?? "0x0");
-          // Accept if amount >= 95% of deposit dollar value
-          if (amt >= minWei) return { ok: true };
-        }
-        if (!logs.some((l) => l.address?.toLowerCase() === USDT_BEP20_CONTRACT.toLowerCase())) {
-          return { ok: false, reason: "notusdt" };
-        }
-        return { ok: false, reason: "mismatch" };
-      }
-
       // ── If user provided a TX hash: verify it directly ───────────────────────
       if (userTxHash) {
-        try {
-          const result = deposit.network === "bep20"
-            ? await verifyBep20Hash(userTxHash)
-            : await verifyTrc20Hash(userTxHash);
-          if (result.ok) {
-            found = true;
-            txHash = userTxHash;
-          } else if (result.reason === "notfound") {
-            return res.json({ success: true, status: "pending", message: "Transaction not found on blockchain. Make sure you copied the full hash and the transaction is confirmed." });
-          } else if (result.reason === "notusdt") {
-            return res.json({ success: true, status: "pending", message: "This transaction does not contain a USDT transfer. Please check you selected the right network (BEP-20 / TRC-20)." });
-          } else {
-            return res.json({ success: true, status: "pending", message: "Transaction found, but it was not sent to our receiving wallet. Please verify you used the correct wallet address shown in the dialog." });
-          }
-        } catch {
-          return res.json({ success: true, status: "pending", message: "Could not reach blockchain to verify your transaction. Please try again in a moment." });
+        const result = deposit.network === "bep20"
+          ? await verifyBep20Hash(userTxHash, minWei)
+          : await verifyTrc20Hash(userTxHash, minSun);
+        if (result.ok) {
+          found = true;
+          txHash = userTxHash;
+        } else if (result.reason === "notfound" || result.reason === "error") {
+          return res.json({ success: true, status: "pending", message: "Transaction not found on blockchain yet. Make sure the transaction is confirmed and the hash is correct." });
+        } else if (result.reason === "notusdt") {
+          return res.json({ success: true, status: "pending", message: "This transaction does not contain a USDT transfer. Please check you selected the correct network." });
+        } else {
+          return res.json({ success: true, status: "pending", message: "Transaction found but not sent to our wallet or amount is incorrect. Please check the wallet address and amount." });
         }
       }
 
-      // ── Fallback: scan recent transactions on our wallet ─────────────────────
+      // ── Scan recent transactions on our wallet ────────────────────────────────
       if (!found) {
-        if (deposit.network === "bep20") {
-          // BEP-20: Use BSC public RPC eth_getLogs in 200-block chunks
-          try {
-            const bscRpc = "https://bsc-dataseed1.binance.org/";
-            const blockResp = await fetch(bscRpc, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ jsonrpc: "2.0", method: "eth_blockNumber", params: [], id: 1 }),
-              signal: AbortSignal.timeout(8000),
-            });
-            const blockData = await blockResp.json() as { result?: string };
-            const latestBlock = parseInt(blockData.result ?? "0x0", 16);
-            // BSC ~3s/block, deposit is max 24h = 28800 blocks. Search in 200-block chunks up to 600 blocks back (~30 min quick scan)
-            const transferTopic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
-            const walletPadded = "0x000000000000000000000000" + USDT_BEP20_ADDRESS.slice(2).toLowerCase();
-            const chunkSize = 150;
-            const totalBlocks = Math.min(Math.ceil((Date.now() - since) / 3000), 600);
-            for (let offset = 0; offset < totalBlocks && !found; offset += chunkSize) {
-              const toBlock = latestBlock - offset;
-              const fromBlock = toBlock - chunkSize + 1;
-              const logsResp = await fetch(bscRpc, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  jsonrpc: "2.0", method: "eth_getLogs", id: 1,
-                  params: [{
-                    fromBlock: "0x" + fromBlock.toString(16),
-                    toBlock: "0x" + toBlock.toString(16),
-                    address: USDT_BEP20_CONTRACT,
-                    topics: [transferTopic, null, walletPadded],
-                  }],
-                }),
-                signal: AbortSignal.timeout(10000),
-              });
-              const logsData = await logsResp.json() as { result?: Array<{ data: string; transactionHash: string }> };
-              if (!Array.isArray(logsData.result)) break;
-              for (const log of logsData.result) {
-                const amt = BigInt(log.data ?? "0x0");
-                if (amt === expectedWei) { found = true; txHash = log.transactionHash; break; }
-              }
-            }
-          } catch { /* BSC RPC unavailable */ }
-        } else {
-          // TRC-20: TronGrid scan of wallet's incoming trc20 transactions
-          interface TronGridTransfer {
-            transaction_id: string;
-            to: string;
-            value: string;
-            quant?: string;
-          }
-          interface TronGridResp { data: TronGridTransfer[]; }
-
-          try {
-            const tronGridUrl = `https://api.trongrid.io/v1/accounts/${USDT_TRC20_ADDRESS}/transactions/trc20?contract_address=${USDT_TRC20_CONTRACT}&limit=50&min_timestamp=${since}&order_by=block_timestamp,desc`;
-            const tronGridResp = await fetch(tronGridUrl, {
-              signal: AbortSignal.timeout(12000),
-              headers: { "Accept": "application/json", "User-Agent": "ChatGPT-Recharge/1.0" },
-            });
-            const contentType = tronGridResp.headers.get("content-type") ?? "";
-            if (tronGridResp.ok && contentType.includes("application/json")) {
-              const tronGridData = await tronGridResp.json() as TronGridResp;
-              if (Array.isArray(tronGridData.data)) {
-                for (const tx of tronGridData.data) {
-                  const txAmount = parseInt(tx.value || tx.quant || "0");
-                  const toAddr = (tx.to ?? "").toLowerCase();
-                  if (toAddr === USDT_TRC20_ADDRESS.toLowerCase() && txAmount === expectedAmountTrc20) {
-                    found = true; txHash = tx.transaction_id; break;
-                  }
-                }
-              }
-            }
-          } catch { /* TronGrid unavailable */ }
+        const scannedHash = deposit.network === "bep20"
+          ? await scanBep20(deposit.amountUsdt)
+          : await scanTrc20(deposit.amountUsdt);
+        if (scannedHash) {
+          found = true;
+          txHash = scannedHash;
         }
       }
 
       if (found && txHash) {
-        // Credit atomically inside a transaction; guard against txHash reuse
-        const result = await db.transaction(async (tx) => {
-          // Ensure this txHash hasn't already been used for any other deposit
-          const [txUsed] = await tx.select({ id: depositRequests.id })
-            .from(depositRequests)
-            .where(and(eq(depositRequests.txHash, txHash), eq(depositRequests.status, "completed")))
-            .limit(1);
-          if (txUsed) return null; // TX already claimed — don't double-credit
-
-          // Re-read deposit inside the transaction to confirm still pending
-          const [dep] = await tx.select().from(depositRequests)
-            .where(and(eq(depositRequests.id, depositId), eq(depositRequests.status, "pending")))
-            .limit(1);
-          if (!dep) return null; // Already processed by concurrent request
-
-          // Mark deposit completed
-          await tx.update(depositRequests)
-            .set({ status: "completed", txHash })
-            .where(eq(depositRequests.id, depositId));
-
-          // Atomically increment user balance (avoid read-then-write race)
-          const [updatedUser] = await tx.update(users)
-            .set({ balanceCents: sql`balance_cents + ${dep.amountCents}` })
-            .where(eq(users.id, dep.userId))
-            .returning({ balanceCents: users.balanceCents });
-
-          await tx.insert(transactions).values({
-            userId: dep.userId,
-            amountCents: dep.amountCents,
-            type: "credit",
-            description: `USDT top-up via ${dep.network.toUpperCase()} — ${dep.amountUsdt} USDT`,
-            createdBy: dep.userId,
-          });
-          return updatedUser?.balanceCents ?? null;
-        });
-
-        if (result !== null) {
-          return res.json({ success: true, status: "completed", balanceCents: result });
+        const newBalance = await creditDeposit(depositId, txHash);
+        if (newBalance !== null) {
+          return res.json({ success: true, status: "completed", balanceCents: newBalance });
         }
-        // result is null — either concurrent request completed this deposit OR
-        // the matched txHash was already claimed by a different deposit.
-        // Re-fetch the deposit to return accurate current status.
-        const [current] = await db.select({ status: depositRequests.status })
+        // Already credited by concurrent request — check final state
+        const [current] = await db.select({ status: depositRequests.status, userId: depositRequests.userId })
           .from(depositRequests).where(eq(depositRequests.id, depositId)).limit(1);
         if (current?.status === "completed") {
-          return res.json({ success: true, status: "completed" });
+          const [u] = await db.select({ balanceCents: users.balanceCents }).from(users).where(eq(users.id, current.userId));
+          return res.json({ success: true, status: "completed", balanceCents: u?.balanceCents ?? null });
         }
-        return res.json({ success: true, status: "pending", message: "Payment not detected yet. Please wait a few minutes and try again." });
       }
 
-      return res.json({ success: true, status: "pending", message: "Payment not detected yet. Please wait a few minutes and try again." });
+      return res.json({ success: true, status: "pending", message: "Payment not detected yet. Scanning the blockchain — please wait." });
     } catch (err) {
-      console.error("Deposit check error:", err);
-      return res.json({ success: true, status: "pending", message: "Could not reach blockchain. Please wait a moment and try again." });
+      console.error("[deposit] check route error:", err);
+      return res.json({ success: true, status: "pending", message: "Could not reach blockchain at the moment. Will keep trying." });
     }
   });
 
