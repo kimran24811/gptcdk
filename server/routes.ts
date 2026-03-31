@@ -296,6 +296,86 @@ export async function processAllPendingDeposits(): Promise<void> {
 const CDK_API_KEY = process.env.CDK_API_KEY || "";
 const API_BASE = "https://keys.ovh/api/v1";
 
+// ── WhatsApp Bot helpers ──────────────────────────────────────────────────────
+
+interface WaState {
+  stage: "idle" | "awaiting_session";
+  cdkKey?: string;
+  lastActivity: number;
+}
+const waStateMap = new Map<string, WaState>();
+
+// Purge idle sessions older than 30 minutes
+setInterval(() => {
+  const cutoff = Date.now() - 30 * 60 * 1000;
+  for (const [phone, state] of waStateMap.entries()) {
+    if (state.lastActivity < cutoff) waStateMap.delete(phone);
+  }
+}, 30 * 60 * 1000);
+
+async function sendWhatsAppMessage(to: string, text: string): Promise<void> {
+  const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+  const token = process.env.WHATSAPP_ACCESS_TOKEN;
+  if (!phoneId || !token) {
+    console.error("[whatsapp] Missing WHATSAPP_PHONE_NUMBER_ID or WHATSAPP_ACCESS_TOKEN secrets");
+    return;
+  }
+  try {
+    const resp = await fetch(`https://graph.facebook.com/v22.0/${phoneId}/messages`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ messaging_product: "whatsapp", to, type: "text", text: { body: text } }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!resp.ok) {
+      const err = await resp.text();
+      console.error("[whatsapp] sendWhatsAppMessage error:", resp.status, err.slice(0, 300));
+    }
+  } catch (err) {
+    console.error("[whatsapp] sendWhatsAppMessage fetch error:", err);
+  }
+}
+
+async function checkCdkKeyStatus(key: string): Promise<{ status: string; type?: string }> {
+  try {
+    const data = await apiCall("GET", `/key/${encodeURIComponent(key.trim())}/status`);
+    if (!data.success) return { status: "invalid" };
+    const keyData = data.data;
+    if (keyData.status === "available") return { status: "available", type: keyData.subscription };
+    if (keyData.status === "used" || keyData.status === "activated") return { status: "used" };
+    if (keyData.status === "expired") return { status: "expired" };
+    return { status: "invalid" };
+  } catch {
+    return { status: "error" };
+  }
+}
+
+async function activateCdkViaWhatsApp(cdkKey: string, sessionData: string): Promise<{ success: boolean; email?: string; subscription?: string; message?: string }> {
+  const rawSession = sessionData.trim();
+  let accessToken: string = rawSession;
+  try {
+    const parsed = JSON.parse(rawSession);
+    if (parsed && typeof parsed === "object") {
+      accessToken = parsed.accessToken || parsed.access_token || parsed.token || rawSession;
+    }
+  } catch { /* not JSON — treat as raw token */ }
+
+  let data = await apiCall("POST", "/activate", { key: cdkKey.trim(), user_token: rawSession });
+  if (!data.success && data.error === "token_invalid") {
+    data = await apiCall("POST", "/activate", { key: cdkKey.trim(), user_token: accessToken });
+  }
+  if (data.success) {
+    return { success: true, email: data.data?.email, subscription: data.data?.subscription };
+  }
+  const errMap: Record<string, string> = {
+    key_not_found: "Key not found or not available.",
+    activation_failed: "Activation failed. Please check your session data and try again.",
+    token_invalid: "Invalid session. Please get a fresh session from chat.openai.com/api/auth/session.",
+    rate_limit_exceeded: "Too many requests. Please wait a moment and try again.",
+  };
+  return { success: false, message: errMap[data.error] || data.message || "Activation failed." };
+}
+
 async function apiCall(method: string, path: string, body?: object) {
   const res = await fetch(`${API_BASE}${path}`, {
     method,
@@ -2065,6 +2145,115 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (err) {
       console.error("Purchase custom product error:", err);
       return res.status(500).json({ success: false, message: "Purchase failed. Please try again." });
+    }
+  });
+
+  // ── WhatsApp Bot Webhook ──────────────────────────────────────────────────
+
+  app.get("/webhook/whatsapp", (req, res) => {
+    const mode = req.query["hub.mode"];
+    const token = req.query["hub.verify_token"];
+    const challenge = req.query["hub.challenge"];
+    const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
+    if (!verifyToken) {
+      console.error("[whatsapp] WHATSAPP_VERIFY_TOKEN secret not set");
+      return res.sendStatus(500);
+    }
+    if (mode === "subscribe" && token === verifyToken) {
+      console.log("[whatsapp] Webhook verified successfully");
+      return res.status(200).send(challenge);
+    }
+    console.warn("[whatsapp] Webhook verification failed — token mismatch");
+    return res.sendStatus(403);
+  });
+
+  app.post("/webhook/whatsapp", async (req, res) => {
+    res.sendStatus(200); // respond immediately so Meta doesn't retry
+    try {
+      const body = req.body;
+      if (body?.object !== "whatsapp_business_account") return;
+
+      const messages = body.entry?.[0]?.changes?.[0]?.value?.messages;
+      if (!Array.isArray(messages) || messages.length === 0) return;
+
+      for (const msg of messages) {
+        if (msg.type !== "text") continue;
+        const from: string = msg.from;
+        const text: string = (msg.text?.body ?? "").trim();
+        if (!from || !text) continue;
+
+        console.log(`[whatsapp] Message from ${from}: ${text.slice(0, 80)}`);
+
+        let state: WaState = waStateMap.get(from) ?? { stage: "idle", lastActivity: Date.now() };
+        state.lastActivity = Date.now();
+
+        if (state.stage === "idle") {
+          const looksLikeKey = text.length >= 8 && !text.includes(" ");
+          if (looksLikeKey) {
+            const check = await checkCdkKeyStatus(text);
+            if (check.status === "available") {
+              waStateMap.set(from, { stage: "awaiting_session", cdkKey: text, lastActivity: Date.now() });
+              const planInfo = check.type ? ` (${check.type})` : "";
+              await sendWhatsAppMessage(from,
+                `✅ Key verified${planInfo}!\n\nNow send your ChatGPT session token to activate your account.\n\nGet it from:\nchat.openai.com/api/auth/session\n\nCopy the full JSON and send it here.`
+              );
+            } else if (check.status === "used") {
+              waStateMap.set(from, state);
+              await sendWhatsAppMessage(from, "❌ This key has already been activated by another account.");
+            } else if (check.status === "expired") {
+              waStateMap.set(from, state);
+              await sendWhatsAppMessage(from, "❌ This key has expired and can no longer be used.");
+            } else if (check.status === "error") {
+              waStateMap.set(from, state);
+              await sendWhatsAppMessage(from, "⚠️ Could not check this key right now. Please try again in a moment.");
+            } else {
+              waStateMap.set(from, state);
+              await sendWhatsAppMessage(from,
+                `👋 Welcome to ChatGPT CDK Activation!\n\nSend me your CDK activation key to get started.`
+              );
+            }
+          } else {
+            waStateMap.set(from, state);
+            await sendWhatsAppMessage(from,
+              `👋 Welcome to ChatGPT CDK Activation!\n\nSend me your CDK activation key to get started.`
+            );
+          }
+        } else if (state.stage === "awaiting_session") {
+          const cdkKey = state.cdkKey!;
+
+          // Allow user to send a new CDK key to start over
+          const looksLikeNewKey = text.length >= 8 && !text.includes(" ") && !text.startsWith("{") && !text.startsWith("ey");
+          if (looksLikeNewKey) {
+            const check = await checkCdkKeyStatus(text);
+            if (check.status === "available") {
+              waStateMap.set(from, { stage: "awaiting_session", cdkKey: text, lastActivity: Date.now() });
+              const planInfo = check.type ? ` (${check.type})` : "";
+              await sendWhatsAppMessage(from, `✅ New key verified${planInfo}!\n\nNow send your ChatGPT session token to activate.`);
+              continue;
+            }
+          }
+
+          await sendWhatsAppMessage(from, "⏳ Activating your account, please wait...");
+          const result = await activateCdkViaWhatsApp(cdkKey, text);
+
+          if (result.success) {
+            waStateMap.delete(from);
+            const details = [
+              result.email ? `📧 Account: ${result.email}` : null,
+              result.subscription ? `📦 Plan: ${result.subscription}` : null,
+            ].filter(Boolean).join("\n");
+            await sendWhatsAppMessage(from,
+              `🎉 Your ChatGPT account has been activated successfully!\n\n${details}\n\nEnjoy your subscription!`
+            );
+          } else {
+            await sendWhatsAppMessage(from,
+              `❌ Activation failed: ${result.message}\n\nPlease try sending your session token again, or send your CDK key again to start over.`
+            );
+          }
+        }
+      }
+    } catch (err) {
+      console.error("[whatsapp] Webhook handler error:", err);
     }
   });
 
