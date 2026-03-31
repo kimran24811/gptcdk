@@ -164,6 +164,7 @@ function TopUpDialog({ open, onClose }: { open: boolean; onClose: () => void }) 
       }
       return false;
     } catch {
+      setCheckResult((prev: any) => prev ?? { status: "pending", message: "Network issue — retrying…" });
       return false;
     }
   };
