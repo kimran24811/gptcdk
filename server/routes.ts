@@ -97,18 +97,28 @@ async function scanBep20(amountUsdt: string): Promise<string | null> {
       console.error("[deposit] BSCScan scan HTTP error:", resp.status, resp.statusText);
       return null;
     }
-    const data = await resp.json() as { status: string; result: Array<{ hash: string; value: string; tokenDecimal: string; to: string; confirmations: string }> | string };
+    const data = await resp.json() as { status: string; message?: string; result: Array<{ hash: string; value: string; tokenDecimal: string; to: string; confirmations: string }> | string };
     if (data.status !== "1" || !Array.isArray(data.result)) {
-      if (data.status !== "0") console.error("[deposit] BSCScan scan unexpected response:", JSON.stringify(data).slice(0, 200));
+      const resultStr = typeof data.result === "string" ? data.result : "";
+      if (resultStr.toLowerCase().includes("rate limit") || data.message?.toLowerCase().includes("rate limit")) {
+        console.error("[deposit] BSCScan rate limit reached — add BSCSCAN_API_KEY or reduce scan frequency");
+      } else if (data.status !== "0") {
+        console.error("[deposit] BSCScan scan unexpected response:", JSON.stringify(data).slice(0, 200));
+      }
       return null;
     }
-    // USDT BEP-20 has 18 decimals
+    // USDT BEP-20 has 18 decimals. Use ±2% tolerance to handle exchange rounding.
     const expectedWei = BigInt(Math.round(parseFloat(amountUsdt) * 10_000)) * BigInt("100000000000000");
+    const minWei = expectedWei * 98n / 100n;
+    const maxWei = expectedWei * 102n / 100n;
     for (const tx of data.result) {
       if (tx.to?.toLowerCase() !== USDT_BEP20_ADDRESS.toLowerCase()) continue;
       if (parseInt(tx.confirmations) < 1) continue;
       const val = BigInt(tx.value ?? "0");
-      if (val === expectedWei) return tx.hash;
+      if (val >= minWei && val <= maxWei) {
+        console.log(`[deposit] BSCScan matched: expected ~${amountUsdt} USDT, got ${(Number(val) / 1e18).toFixed(4)} USDT tx=${tx.hash}`);
+        return tx.hash;
+      }
     }
     return null;
   } catch (err) {
@@ -137,11 +147,16 @@ async function scanTrc20(amountUsdt: string): Promise<string | null> {
       if (ct.includes("application/json")) {
         const data = await resp.json() as { token_transfers?: Array<{ transaction_id: string; quant: string; to_address: string; confirmed: boolean }> };
         if (Array.isArray(data.token_transfers)) {
+          const minSun = Math.floor(expectedSun * 0.98);
+          const maxSun = Math.ceil(expectedSun * 1.02);
           for (const tx of data.token_transfers) {
             if (tx.to_address?.toLowerCase() !== USDT_TRC20_ADDRESS.toLowerCase()) continue;
             if (!tx.confirmed) continue;
             const val = parseInt(tx.quant ?? "0");
-            if (val === expectedSun) return tx.transaction_id;
+            if (val >= minSun && val <= maxSun) {
+              console.log(`[deposit] Tronscan matched: expected ~${amountUsdt} USDT, got ${(val / 1e6).toFixed(4)} USDT tx=${tx.transaction_id}`);
+              return tx.transaction_id;
+            }
           }
           return null; // Tronscan responded fine, no match
         }
@@ -171,10 +186,15 @@ async function scanTrc20(amountUsdt: string): Promise<string | null> {
     if (!ct.includes("application/json")) return null;
     const data = await resp.json() as { data?: Array<{ transaction_id: string; value: string; to: string }> };
     if (!Array.isArray(data.data)) return null;
+    const minSun = Math.floor(expectedSun * 0.98);
+    const maxSun = Math.ceil(expectedSun * 1.02);
     for (const tx of data.data) {
       if (tx.to?.toLowerCase() !== USDT_TRC20_ADDRESS.toLowerCase()) continue;
       const val = parseInt(tx.value ?? "0");
-      if (val === expectedSun) return tx.transaction_id;
+      if (val >= minSun && val <= maxSun) {
+        console.log(`[deposit] TronGrid matched: expected ~${amountUsdt} USDT, got ${(val / 1e6).toFixed(4)} USDT tx=${tx.transaction_id}`);
+        return tx.transaction_id;
+      }
     }
     return null;
   } catch (err) {
@@ -228,10 +248,22 @@ async function creditDeposit(depositId: number, txHash: string): Promise<number 
 export async function processAllPendingDeposits(): Promise<void> {
   try {
     const now = new Date();
+
+    // ── Step 1: Expire any past-due pending deposits ──────────────────────────
+    const expiredRows = await db.update(depositRequests)
+      .set({ status: "expired" })
+      .where(and(eq(depositRequests.status, "pending"), sql`expires_at <= ${now}`))
+      .returning({ id: depositRequests.id });
+    if (expiredRows.length > 0) {
+      console.log(`[deposit] Marked ${expiredRows.length} overdue deposit(s) as expired`);
+    }
+
+    // ── Step 2: Scan active pending deposits ──────────────────────────────────
     const pending = await db.select().from(depositRequests)
       .where(and(eq(depositRequests.status, "pending"), sql`expires_at > ${now}`));
     if (pending.length === 0) return;
 
+    console.log(`[deposit] Scanning ${pending.length} active pending deposit(s)…`);
     for (const dep of pending) {
       try {
         const txHash = dep.network === "bep20"
@@ -240,12 +272,14 @@ export async function processAllPendingDeposits(): Promise<void> {
         if (txHash) {
           const newBalance = await creditDeposit(dep.id, txHash);
           if (newBalance !== null) {
-            console.log(`[deposit] Auto-credited deposit #${dep.id} (${dep.amountUsdt} USDT ${dep.network.toUpperCase()}) → user ${dep.userId}, new balance: ${newBalance} cents`);
+            console.log(`[deposit] ✓ Auto-credited deposit #${dep.id} (${dep.amountUsdt} USDT ${dep.network.toUpperCase()}) → user ${dep.userId}, new balance: ${newBalance} cents`);
           }
         }
       } catch (err) {
         console.error(`[deposit] Background check failed for deposit #${dep.id}:`, err);
       }
+      // Small delay between deposits to avoid rapid-fire API rate limiting
+      if (pending.length > 1) await new Promise(r => setTimeout(r, 600));
     }
   } catch (err) {
     console.error("[deposit] processAllPendingDeposits error:", err);
