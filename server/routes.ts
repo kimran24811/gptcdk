@@ -2195,7 +2195,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               waStateMap.set(from, { stage: "awaiting_session", cdkKey: text, lastActivity: Date.now() });
               const planInfo = check.type ? ` (${check.type})` : "";
               await sendWhatsAppMessage(from,
-                `✅ Key verified${planInfo}!\n\nNow send your ChatGPT session token to activate your account.\n\nGet it from:\nchat.openai.com/api/auth/session\n\nCopy the full JSON and send it here.`
+                `✅ Key verified${planInfo}!\n\nNow send your ChatGPT session token to activate.\n\n📋 How to get it:\n1. Open your browser\n2. Go to: chat.openai.com/api/auth/session\n3. You will see a long JSON text starting with {"user":...\n4. Select ALL of it and send it here\n\n⚠️ The session token is NOT a CDK key. It is a long JSON from that URL.`
               );
             } else if (check.status === "used") {
               waStateMap.set(from, state);
@@ -2221,14 +2221,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         } else if (state.stage === "awaiting_session") {
           const cdkKey = state.cdkKey!;
 
-          // Allow user to send a new CDK key to start over
-          const looksLikeNewKey = text.length >= 8 && !text.includes(" ") && !text.startsWith("{") && !text.startsWith("ey");
-          if (looksLikeNewKey) {
+          // Detect if user accidentally sent another CDK-like string (short, no spaces, no JSON markers)
+          // If so, check if it's a valid new key; if not, re-explain what a session token is
+          const looksLikeCdkKey = text.length <= 30 && !text.includes(" ") && !text.startsWith("{") && !text.startsWith("ey") && /^[A-Za-z0-9_\-]+$/.test(text);
+          if (looksLikeCdkKey) {
             const check = await checkCdkKeyStatus(text);
             if (check.status === "available") {
               waStateMap.set(from, { stage: "awaiting_session", cdkKey: text, lastActivity: Date.now() });
               const planInfo = check.type ? ` (${check.type})` : "";
-              await sendWhatsAppMessage(from, `✅ New key verified${planInfo}!\n\nNow send your ChatGPT session token to activate.`);
+              await sendWhatsAppMessage(from, `✅ New key accepted${planInfo}!\n\nNow send your ChatGPT session token to activate.\n\n📋 Go to: chat.openai.com/api/auth/session\nCopy the full JSON text and send it here.`);
+              continue;
+            } else {
+              // Looks like a CDK key but not valid — re-explain session token
+              await sendWhatsAppMessage(from,
+                `⚠️ That does not look like a session token.\n\nYour CDK key is already verified. I need your ChatGPT session token now.\n\n📋 How to get it:\n1. Open your browser\n2. Go to: chat.openai.com/api/auth/session\n3. You will see a long JSON starting with {"user":...\n4. Copy ALL of it and send it here\n\nOr send a new CDK key to start over.`
+              );
+              waStateMap.set(from, state);
               continue;
             }
           }
@@ -2247,7 +2255,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             );
           } else {
             await sendWhatsAppMessage(from,
-              `❌ Activation failed: ${result.message}\n\nPlease try sending your session token again, or send your CDK key again to start over.`
+              `❌ Activation failed: ${result.message}\n\nMake sure you copied the full JSON from chat.openai.com/api/auth/session and try again. Or send your CDK key again to start over.`
             );
           }
         }
