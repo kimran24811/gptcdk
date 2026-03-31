@@ -49,6 +49,7 @@ waitForPort = 5000
 CDK_API_KEY = "sk_live_282a209ac5f0869745fe95942efd5c574fe579301e6a7dd0"
 ADMIN_EMAIL = "admin@gptcdk.xyz"
 ADMIN_PASSWORD = "Admin@CDK2024!"
+TRONGRID_API_KEY = "dad76d40-14a8-47f6-bfe3-d41fbae24e87"
 
 [postMerge]
 path = "scripts/post-merge.sh"
