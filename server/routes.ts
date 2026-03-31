@@ -14,31 +14,35 @@ const USDT_TRC20_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 // ── Blockchain detection helpers ─────────────────────────────────────────────
 
 /**
- * Verify a user-provided TRC-20 tx hash via TronGrid.
+ * Verify a user-provided TRC-20 tx hash via Tronscan API.
  * Returns { ok: true } if the tx transfers enough USDT to our wallet.
  */
 async function verifyTrc20Hash(hash: string, minSun: number): Promise<{ ok: boolean; reason?: string }> {
   try {
-    const url = `https://api.trongrid.io/wallet/gettransactioninfobyid`;
+    const url = `https://apilist.tronscanapi.com/api/transaction-info?hash=${encodeURIComponent(hash)}`;
     const resp = await fetch(url, {
-      method: "POST",
-      headers: { "Accept": "application/json", "Content-Type": "application/json" },
-      body: JSON.stringify({ value: hash }),
       signal: AbortSignal.timeout(12000),
+      headers: { "Accept": "application/json", "User-Agent": "ChatGPT-Recharge/1.0" },
     });
-    if (!resp.ok) return { ok: false, reason: "notfound" };
-    const ct = resp.headers.get("content-type") ?? "";
-    if (!ct.includes("application/json")) return { ok: false, reason: "notfound" };
-    const data = await resp.json() as { log?: Array<{ address: string; data: string; topics: string[] }> };
-    if (!data?.log?.length) return { ok: false, reason: "notfound" };
-    const contractHex = "a614f803b6fd780986a42c78ec9c7f77e6ded13c";
-    const transferTopic = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
-    for (const log of data.log) {
-      if (log.address?.toLowerCase() !== contractHex) continue;
-      if (!log.topics?.[0]?.toLowerCase().includes(transferTopic)) continue;
-      const amt = log.data ? parseInt(log.data, 16) : 0;
-      if (amt >= minSun) return { ok: true };
+    if (!resp.ok) {
+      console.error("[deposit] verifyTrc20Hash Tronscan HTTP error:", resp.status);
+      return { ok: false, reason: "error" };
     }
+    const ct = resp.headers.get("content-type") ?? "";
+    if (!ct.includes("application/json")) return { ok: false, reason: "error" };
+    const data = await resp.json() as {
+      contractType?: number;
+      tokenTransferInfo?: { amount_str?: string; to_address?: string; tokenId?: string };
+      confirmed?: boolean;
+    };
+    if (!data || data.contractType === undefined) return { ok: false, reason: "notfound" };
+    const transfer = data.tokenTransferInfo;
+    if (!transfer) return { ok: false, reason: "notusdt" };
+    // tokenId for TRC-20 USDT is the contract address
+    if (transfer.tokenId?.toLowerCase() !== USDT_TRC20_CONTRACT.toLowerCase()) return { ok: false, reason: "notusdt" };
+    if (transfer.to_address?.toLowerCase() !== USDT_TRC20_ADDRESS.toLowerCase()) return { ok: false, reason: "mismatch" };
+    const amt = parseInt(transfer.amount_str ?? "0");
+    if (amt >= minSun) return { ok: true };
     return { ok: false, reason: "mismatch" };
   } catch (err) {
     console.error("[deposit] verifyTrc20Hash error:", err);
@@ -121,7 +125,34 @@ async function scanBep20(amountUsdt: string): Promise<string | null> {
 async function scanTrc20(amountUsdt: string): Promise<string | null> {
   const expectedSun = Math.round(parseFloat(amountUsdt) * 1_000_000);
 
-  // ── Attempt 1: TronGrid (supports optional API key for higher rate limits) ──
+  // ── Attempt 1: Tronscan (primary, no API key required) ───────────────────
+  try {
+    const url = `https://apilist.tronscanapi.com/api/token_trc20/transfers?toAddress=${USDT_TRC20_ADDRESS}&contract_address=${USDT_TRC20_CONTRACT}&limit=50&start=0`;
+    const resp = await fetch(url, {
+      signal: AbortSignal.timeout(12000),
+      headers: { "Accept": "application/json", "User-Agent": "ChatGPT-Recharge/1.0" },
+    });
+    if (resp.ok) {
+      const ct = resp.headers.get("content-type") ?? "";
+      if (ct.includes("application/json")) {
+        const data = await resp.json() as { token_transfers?: Array<{ transaction_id: string; quant: string; to_address: string; confirmed: boolean }> };
+        if (Array.isArray(data.token_transfers)) {
+          for (const tx of data.token_transfers) {
+            if (tx.to_address?.toLowerCase() !== USDT_TRC20_ADDRESS.toLowerCase()) continue;
+            if (!tx.confirmed) continue;
+            const val = parseInt(tx.quant ?? "0");
+            if (val === expectedSun) return tx.transaction_id;
+          }
+          return null; // Tronscan responded fine, no match
+        }
+      }
+    }
+    console.error("[deposit] Tronscan scan HTTP error:", resp.status, resp.statusText);
+  } catch (err) {
+    console.error("[deposit] Tronscan scan error:", err);
+  }
+
+  // ── Attempt 2: TronGrid fallback (supports TRONGRID_API_KEY for higher limits) ──
   try {
     const apiKey = process.env.TRONGRID_API_KEY || "";
     const headers: Record<string, string> = {
@@ -132,52 +163,22 @@ async function scanTrc20(amountUsdt: string): Promise<string | null> {
 
     const url = `https://api.trongrid.io/v1/accounts/${USDT_TRC20_ADDRESS}/transactions/trc20?contract_address=${USDT_TRC20_CONTRACT}&limit=50&order_by=block_timestamp,desc&only_to=true`;
     const resp = await fetch(url, { signal: AbortSignal.timeout(12000), headers });
-    if (resp.ok) {
-      const ct = resp.headers.get("content-type") ?? "";
-      if (ct.includes("application/json")) {
-        const data = await resp.json() as { data?: Array<{ transaction_id: string; value: string; to: string; confirmed?: boolean }> };
-        if (Array.isArray(data.data)) {
-          for (const tx of data.data) {
-            if (tx.to?.toLowerCase() !== USDT_TRC20_ADDRESS.toLowerCase()) continue;
-            const val = parseInt(tx.value ?? "0");
-            if (val === expectedSun) return tx.transaction_id;
-          }
-          return null; // TronGrid responded fine, no match found
-        }
-      }
-    }
-    console.error("[deposit] TronGrid scan HTTP error:", resp.status, resp.statusText);
-  } catch (err) {
-    console.error("[deposit] TronGrid scan error:", err);
-  }
-
-  // ── Attempt 2: Tronscan public API as fallback ────────────────────────────
-  try {
-    const url = `https://apilist.tronscan.org/api/token_trc20/transfers?toAddress=${USDT_TRC20_ADDRESS}&contract_address=${USDT_TRC20_CONTRACT}&limit=50&start=0`;
-    const resp = await fetch(url, {
-      signal: AbortSignal.timeout(12000),
-      headers: { "Accept": "application/json", "User-Agent": "ChatGPT-Recharge/1.0" },
-    });
     if (!resp.ok) {
-      console.error("[deposit] Tronscan fallback HTTP error:", resp.status, resp.statusText);
+      console.error("[deposit] TronGrid fallback scan HTTP error:", resp.status, resp.statusText);
       return null;
     }
     const ct = resp.headers.get("content-type") ?? "";
-    if (!ct.includes("application/json")) {
-      console.error("[deposit] Tronscan fallback returned non-JSON");
-      return null;
-    }
-    const data = await resp.json() as { token_transfers?: Array<{ transaction_id: string; quant: string; to_address: string; confirmed: boolean }> };
-    if (!Array.isArray(data.token_transfers)) return null;
-    for (const tx of data.token_transfers) {
-      if (tx.to_address?.toLowerCase() !== USDT_TRC20_ADDRESS.toLowerCase()) continue;
-      if (!tx.confirmed) continue;
-      const val = parseInt(tx.quant ?? "0");
+    if (!ct.includes("application/json")) return null;
+    const data = await resp.json() as { data?: Array<{ transaction_id: string; value: string; to: string }> };
+    if (!Array.isArray(data.data)) return null;
+    for (const tx of data.data) {
+      if (tx.to?.toLowerCase() !== USDT_TRC20_ADDRESS.toLowerCase()) continue;
+      const val = parseInt(tx.value ?? "0");
       if (val === expectedSun) return tx.transaction_id;
     }
     return null;
   } catch (err) {
-    console.error("[deposit] Tronscan fallback scan error:", err);
+    console.error("[deposit] TronGrid fallback scan error:", err);
     return null;
   }
 }
@@ -1247,13 +1248,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (result.ok) {
           found = true;
           txHash = userTxHash;
-        } else if (result.reason === "notfound" || result.reason === "error") {
-          return res.json({ success: true, status: "pending", message: "Transaction not found on blockchain yet. Make sure the transaction is confirmed and the hash is correct." });
         } else if (result.reason === "notusdt") {
+          // Definitive mismatch — no point scanning wallet
           return res.json({ success: true, status: "pending", message: "This transaction does not contain a USDT transfer. Please check you selected the correct network." });
-        } else {
+        } else if (result.reason === "mismatch") {
+          // Definitive mismatch — transaction found but wrong wallet/amount
           return res.json({ success: true, status: "pending", message: "Transaction found but not sent to our wallet or amount is incorrect. Please check the wallet address and amount." });
         }
+        // reason === "notfound" | "error" → provider may be down, fall through to wallet scan
       }
 
       // ── Scan recent transactions on our wallet ────────────────────────────────
