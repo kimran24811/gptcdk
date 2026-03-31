@@ -107,10 +107,13 @@ async function scanBep20(amountUsdt: string): Promise<string | null> {
       }
       return null;
     }
-    // USDT BEP-20 has 18 decimals. Use ±2% tolerance to handle exchange rounding.
+    // USDT BEP-20 has 18 decimals.
+    // Allow ±0.01 USDT tolerance to handle exchange decimal rounding (e.g. 10.9036 → 10.90).
+    // This is a tiny fixed window that covers rounding only — not a percentage discount.
     const expectedWei = BigInt(Math.round(parseFloat(amountUsdt) * 10_000)) * BigInt("100000000000000");
-    const minWei = expectedWei * 98n / 100n;
-    const maxWei = expectedWei * 102n / 100n;
+    const toleranceWei = BigInt("10000000000000000"); // 0.01 USDT in 18-decimal wei
+    const minWei = expectedWei - toleranceWei;
+    const maxWei = expectedWei + toleranceWei;
     for (const tx of data.result) {
       if (tx.to?.toLowerCase() !== USDT_BEP20_ADDRESS.toLowerCase()) continue;
       if (parseInt(tx.confirmations) < 1) continue;
@@ -147,8 +150,10 @@ async function scanTrc20(amountUsdt: string): Promise<string | null> {
       if (ct.includes("application/json")) {
         const data = await resp.json() as { token_transfers?: Array<{ transaction_id: string; quant: string; to_address: string; confirmed: boolean }> };
         if (Array.isArray(data.token_transfers)) {
-          const minSun = Math.floor(expectedSun * 0.98);
-          const maxSun = Math.ceil(expectedSun * 1.02);
+          // ±0.01 USDT tolerance (= ±10000 sun) for exchange decimal rounding only
+          const toleranceSun = 10000;
+          const minSun = expectedSun - toleranceSun;
+          const maxSun = expectedSun + toleranceSun;
           for (const tx of data.token_transfers) {
             if (tx.to_address?.toLowerCase() !== USDT_TRC20_ADDRESS.toLowerCase()) continue;
             if (!tx.confirmed) continue;
@@ -186,8 +191,10 @@ async function scanTrc20(amountUsdt: string): Promise<string | null> {
     if (!ct.includes("application/json")) return null;
     const data = await resp.json() as { data?: Array<{ transaction_id: string; value: string; to: string }> };
     if (!Array.isArray(data.data)) return null;
-    const minSun = Math.floor(expectedSun * 0.98);
-    const maxSun = Math.ceil(expectedSun * 1.02);
+    // ±0.01 USDT tolerance (= ±10000 sun) for exchange decimal rounding only
+    const toleranceSun = 10000;
+    const minSun = expectedSun - toleranceSun;
+    const maxSun = expectedSun + toleranceSun;
     for (const tx of data.data) {
       if (tx.to?.toLowerCase() !== USDT_TRC20_ADDRESS.toLowerCase()) continue;
       const val = parseInt(tx.value ?? "0");
