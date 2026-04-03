@@ -5,6 +5,10 @@ import { eq, desc, and, ne, sql, inArray, lt } from "drizzle-orm";
 import { db } from "./storage";
 import { users, transactions, orders, depositRequests, inventoryKeys, customProducts, customVouchers, announcementConfig, apiKeys } from "@shared/schema";
 import crypto from "crypto";
+import path from "path";
+import { fileURLToPath } from "url";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const USDT_BEP20_ADDRESS = process.env.USDT_BEP20_ADDRESS || "0x0c31c91ec2cbb607aeca28c1bc09c55352db2fea";
 const USDT_TRC20_ADDRESS = process.env.USDT_TRC20_ADDRESS || "TLUSXogZfhgWGHpTBHNtNQPanq6AvNfCY4";
@@ -607,6 +611,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   await seedAdmin();
   // Warm pricing cache on startup (non-blocking — purchase falls back to live fetch if cache is cold)
   warmPricingCache().catch(() => {});
+
+  // ── Temporary DB backup download ─────────────────────
+  app.get("/dl/db-backup.sql", (_req, res) => {
+    const filePath = path.resolve(__dirname, "../gptcdk_backup.sql");
+    res.download(filePath, "gptcdk_backup.sql");
+  });
 
   // ── Auth ────────────────────────────────────────────
 
