@@ -53,3 +53,6 @@ ADMIN_PASSWORD = "Admin@CDK2024!"
 [postMerge]
 path = "scripts/post-merge.sh"
 timeoutMs = 20000
+
+[agent]
+integrations = ["github:1.0.0"]
