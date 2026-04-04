@@ -135,6 +135,9 @@ export async function startWhatsApp(): Promise<void> {
       const from = msg.key.remoteJid;
       if (!from) continue;
 
+      // Only handle direct/private messages — ignore group chats
+      if (from.endsWith("@g.us") || from.endsWith("@broadcast")) continue;
+
       const text =
         msg.message.conversation ||
         msg.message.extendedTextMessage?.text ||
