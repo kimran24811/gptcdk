@@ -5,6 +5,7 @@ import { eq, desc, and, ne, sql, inArray, lt } from "drizzle-orm";
 import { db } from "./storage";
 import { users, transactions, orders, depositRequests, inventoryKeys, customProducts, customVouchers, announcementConfig, apiKeys } from "@shared/schema";
 import crypto from "crypto";
+import { sendWhatsAppMessage, getQRCodeDataURL, getConnectionStatus, setMessageHandler } from "./whatsapp";
 
 const USDT_BEP20_ADDRESS = process.env.USDT_BEP20_ADDRESS || "0x0c31c91ec2cbb607aeca28c1bc09c55352db2fea";
 const USDT_TRC20_ADDRESS = process.env.USDT_TRC20_ADDRESS || "TLUSXogZfhgWGHpTBHNtNQPanq6AvNfCY4";
@@ -312,32 +313,6 @@ setInterval(() => {
     if (state.lastActivity < cutoff) waStateMap.delete(phone);
   }
 }, 30 * 60 * 1000);
-
-async function sendWhatsAppMessage(to: string, text: string): Promise<void> {
-  const instanceId = process.env.GREEN_API_INSTANCE_ID;
-  const token = process.env.GREEN_API_TOKEN;
-  const apiUrl = process.env.GREEN_API_API_URL || "https://7107.api.greenapi.com";
-  if (!instanceId || !token) {
-    console.error("[whatsapp] Missing GREEN_API_INSTANCE_ID or GREEN_API_TOKEN");
-    return;
-  }
-  // Green API expects chatId in format: {digits}@c.us
-  const chatId = to.includes("@") ? to : `${to}@c.us`;
-  try {
-    const resp = await fetch(`${apiUrl}/waInstance${instanceId}/sendMessage/${token}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chatId, message: text }),
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!resp.ok) {
-      const err = await resp.text();
-      console.error("[whatsapp] sendWhatsAppMessage error:", resp.status, err.slice(0, 300));
-    }
-  } catch (err) {
-    console.error("[whatsapp] sendWhatsAppMessage fetch error:", err);
-  }
-}
 
 async function checkCdkKeyStatus(key: string): Promise<{ status: string; type?: string }> {
   try {
@@ -2151,109 +2126,103 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  // ── WhatsApp Bot Webhook ──────────────────────────────────────────────────
+  // ── WhatsApp Bot (Baileys) ────────────────────────────────────────────────
 
-  // Green API does not use a verification handshake — just return 200
-  app.get("/webhook/whatsapp", (req, res) => {
-    res.sendStatus(200);
+  // Admin endpoint: returns QR code image or connection status
+  app.get("/api/admin/whatsapp/qr", requireAdmin, async (req, res) => {
+    try {
+      const { isConnected } = getConnectionStatus();
+      if (isConnected) {
+        return res.json({ status: "connected" });
+      }
+      const qr = await getQRCodeDataURL();
+      if (qr) {
+        return res.json({ status: "qr", qr });
+      }
+      return res.json({ status: "waiting" });
+    } catch (err) {
+      console.error("[whatsapp] QR endpoint error:", err);
+      return res.status(500).json({ status: "error" });
+    }
   });
 
-  app.post("/webhook/whatsapp", async (req, res) => {
-    res.sendStatus(200); // respond immediately so Green API doesn't retry
+  // Register the Baileys message handler for CDK activation
+  setMessageHandler(async (from: string, text: string) => {
     try {
-      const body = req.body;
+      let state: WaState = waStateMap.get(from) ?? { stage: "idle", lastActivity: Date.now() };
+      state.lastActivity = Date.now();
 
-      // Green API webhook format
-      if (body?.typeWebhook !== "incomingMessageReceived") return;
-      if (body?.messageData?.typeMessage !== "textMessage") return;
-
-      const from: string = body?.senderData?.chatId ?? "";
-      const text: string = (body?.messageData?.textMessageData?.textMessage ?? "").trim();
-      if (!from || !text) return;
-
-      // Process as single message (Green API sends one message per webhook)
-      {
-
-        console.log(`[whatsapp] Message from ${from}: ${text.slice(0, 80)}`);
-
-        let state: WaState = waStateMap.get(from) ?? { stage: "idle", lastActivity: Date.now() };
-        state.lastActivity = Date.now();
-
-        if (state.stage === "idle") {
-          const looksLikeKey = text.length >= 8 && !text.includes(" ");
-          if (looksLikeKey) {
-            const check = await checkCdkKeyStatus(text);
-            if (check.status === "available") {
-              waStateMap.set(from, { stage: "awaiting_session", cdkKey: text, lastActivity: Date.now() });
-              const planInfo = check.type ? ` (${check.type})` : "";
-              await sendWhatsAppMessage(from,
-                `✅ Key verified${planInfo}!\n\nNow send your ChatGPT session token to activate.\n\n📋 How to get it:\n1. Open your browser\n2. Go to: chat.openai.com/api/auth/session\n3. You will see a long JSON text starting with {"user":...\n4. Select ALL of it and send it here\n\n⚠️ The session token is NOT a CDK key. It is a long JSON from that URL.`
-              );
-            } else if (check.status === "used") {
-              waStateMap.set(from, state);
-              await sendWhatsAppMessage(from, "❌ This key has already been activated by another account.");
-            } else if (check.status === "expired") {
-              waStateMap.set(from, state);
-              await sendWhatsAppMessage(from, "❌ This key has expired and can no longer be used.");
-            } else if (check.status === "error") {
-              waStateMap.set(from, state);
-              await sendWhatsAppMessage(from, "⚠️ Could not check this key right now. Please try again in a moment.");
-            } else {
-              waStateMap.set(from, state);
-              await sendWhatsAppMessage(from,
-                `👋 Welcome to ChatGPT CDK Activation!\n\nSend me your CDK activation key to get started.`
-              );
-            }
+      if (state.stage === "idle") {
+        const looksLikeKey = text.length >= 8 && !text.includes(" ");
+        if (looksLikeKey) {
+          const check = await checkCdkKeyStatus(text);
+          if (check.status === "available") {
+            waStateMap.set(from, { stage: "awaiting_session", cdkKey: text, lastActivity: Date.now() });
+            const planInfo = check.type ? ` (${check.type})` : "";
+            await sendWhatsAppMessage(from,
+              `✅ Key verified${planInfo}!\n\nNow send your ChatGPT session token to activate.\n\n📋 How to get it:\n1. Open your browser\n2. Go to: chat.openai.com/api/auth/session\n3. You will see a long JSON text starting with {"user":...\n4. Select ALL of it and send it here\n\n⚠️ The session token is NOT a CDK key. It is a long JSON from that URL.`
+            );
+          } else if (check.status === "used") {
+            waStateMap.set(from, state);
+            await sendWhatsAppMessage(from, "❌ This key has already been activated by another account.");
+          } else if (check.status === "expired") {
+            waStateMap.set(from, state);
+            await sendWhatsAppMessage(from, "❌ This key has expired and can no longer be used.");
+          } else if (check.status === "error") {
+            waStateMap.set(from, state);
+            await sendWhatsAppMessage(from, "⚠️ Could not check this key right now. Please try again in a moment.");
           } else {
             waStateMap.set(from, state);
             await sendWhatsAppMessage(from,
               `👋 Welcome to ChatGPT CDK Activation!\n\nSend me your CDK activation key to get started.`
             );
           }
-        } else if (state.stage === "awaiting_session") {
-          const cdkKey = state.cdkKey!;
+        } else {
+          waStateMap.set(from, state);
+          await sendWhatsAppMessage(from,
+            `👋 Welcome to ChatGPT CDK Activation!\n\nSend me your CDK activation key to get started.`
+          );
+        }
+      } else if (state.stage === "awaiting_session") {
+        const cdkKey = state.cdkKey!;
 
-          // Detect if user accidentally sent another CDK-like string (short, no spaces, no JSON markers)
-          // If so, check if it's a valid new key; if not, re-explain what a session token is
-          const looksLikeCdkKey = text.length <= 30 && !text.includes(" ") && !text.startsWith("{") && !text.startsWith("ey") && /^[A-Za-z0-9_\-]+$/.test(text);
-          if (looksLikeCdkKey) {
-            const check = await checkCdkKeyStatus(text);
-            if (check.status === "available") {
-              waStateMap.set(from, { stage: "awaiting_session", cdkKey: text, lastActivity: Date.now() });
-              const planInfo = check.type ? ` (${check.type})` : "";
-              await sendWhatsAppMessage(from, `✅ New key accepted${planInfo}!\n\nNow send your ChatGPT session token to activate.\n\n📋 Go to: chat.openai.com/api/auth/session\nCopy the full JSON text and send it here.`);
-              return;
-            } else {
-              // Looks like a CDK key but not valid — re-explain session token
-              await sendWhatsAppMessage(from,
-                `⚠️ That does not look like a session token.\n\nYour CDK key is already verified. I need your ChatGPT session token now.\n\n📋 How to get it:\n1. Open your browser\n2. Go to: chat.openai.com/api/auth/session\n3. You will see a long JSON starting with {"user":...\n4. Copy ALL of it and send it here\n\nOr send a new CDK key to start over.`
-              );
-              waStateMap.set(from, state);
-              return;
-            }
-          }
-
-          await sendWhatsAppMessage(from, "⏳ Activating your account, please wait...");
-          const result = await activateCdkViaWhatsApp(cdkKey, text);
-
-          if (result.success) {
-            waStateMap.delete(from);
-            const details = [
-              result.email ? `📧 Account: ${result.email}` : null,
-              result.subscription ? `📦 Plan: ${result.subscription}` : null,
-            ].filter(Boolean).join("\n");
-            await sendWhatsAppMessage(from,
-              `🎉 Your ChatGPT account has been activated successfully!\n\n${details}\n\nEnjoy your subscription!`
-            );
+        const looksLikeCdkKey = text.length <= 30 && !text.includes(" ") && !text.startsWith("{") && !text.startsWith("ey") && /^[A-Za-z0-9_\-]+$/.test(text);
+        if (looksLikeCdkKey) {
+          const check = await checkCdkKeyStatus(text);
+          if (check.status === "available") {
+            waStateMap.set(from, { stage: "awaiting_session", cdkKey: text, lastActivity: Date.now() });
+            const planInfo = check.type ? ` (${check.type})` : "";
+            await sendWhatsAppMessage(from, `✅ New key accepted${planInfo}!\n\nNow send your ChatGPT session token to activate.\n\n📋 Go to: chat.openai.com/api/auth/session\nCopy the full JSON text and send it here.`);
+            return;
           } else {
             await sendWhatsAppMessage(from,
-              `❌ Activation failed: ${result.message}\n\nMake sure you copied the full JSON from chat.openai.com/api/auth/session and try again. Or send your CDK key again to start over.`
+              `⚠️ That does not look like a session token.\n\nYour CDK key is already verified. I need your ChatGPT session token now.\n\n📋 How to get it:\n1. Open your browser\n2. Go to: chat.openai.com/api/auth/session\n3. You will see a long JSON starting with {"user":...\n4. Copy ALL of it and send it here\n\nOr send a new CDK key to start over.`
             );
+            waStateMap.set(from, state);
+            return;
           }
+        }
+
+        await sendWhatsAppMessage(from, "⏳ Activating your account, please wait...");
+        const result = await activateCdkViaWhatsApp(cdkKey, text);
+
+        if (result.success) {
+          waStateMap.delete(from);
+          const details = [
+            result.email ? `📧 Account: ${result.email}` : null,
+            result.subscription ? `📦 Plan: ${result.subscription}` : null,
+          ].filter(Boolean).join("\n");
+          await sendWhatsAppMessage(from,
+            `🎉 Your ChatGPT account has been activated successfully!\n\n${details}\n\nEnjoy your subscription!`
+          );
+        } else {
+          await sendWhatsAppMessage(from,
+            `❌ Activation failed: ${result.message}\n\nMake sure you copied the full JSON from chat.openai.com/api/auth/session and try again. Or send your CDK key again to start over.`
+          );
         }
       }
     } catch (err) {
-      console.error("[whatsapp] Webhook handler error:", err);
+      console.error("[whatsapp] Message handler error:", err);
     }
   });
 
