@@ -6,3 +6,6 @@ vite.config.ts.*
 *.tar.gz
 # WhatsApp auth state
 wa-auth/
+# Exported data files
+*.csv
+*.xlsx
