@@ -314,17 +314,20 @@ setInterval(() => {
 }, 30 * 60 * 1000);
 
 async function sendWhatsAppMessage(to: string, text: string): Promise<void> {
-  const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-  const token = process.env.WHATSAPP_ACCESS_TOKEN;
-  if (!phoneId || !token) {
-    console.error("[whatsapp] Missing WHATSAPP_PHONE_NUMBER_ID or WHATSAPP_ACCESS_TOKEN secrets");
+  const instanceId = process.env.GREEN_API_INSTANCE_ID;
+  const token = process.env.GREEN_API_TOKEN;
+  const apiUrl = process.env.GREEN_API_API_URL || "https://7107.api.greenapi.com";
+  if (!instanceId || !token) {
+    console.error("[whatsapp] Missing GREEN_API_INSTANCE_ID or GREEN_API_TOKEN");
     return;
   }
+  // Green API expects chatId in format: {digits}@c.us
+  const chatId = to.includes("@") ? to : `${to}@c.us`;
   try {
-    const resp = await fetch(`https://graph.facebook.com/v22.0/${phoneId}/messages`, {
+    const resp = await fetch(`${apiUrl}/waInstance${instanceId}/sendMessage/${token}`, {
       method: "POST",
-      headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ messaging_product: "whatsapp", to, type: "text", text: { body: text } }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatId, message: text }),
       signal: AbortSignal.timeout(10000),
     });
     if (!resp.ok) {
@@ -2150,37 +2153,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // ── WhatsApp Bot Webhook ──────────────────────────────────────────────────
 
+  // Green API does not use a verification handshake — just return 200
   app.get("/webhook/whatsapp", (req, res) => {
-    const mode = req.query["hub.mode"];
-    const token = req.query["hub.verify_token"];
-    const challenge = req.query["hub.challenge"];
-    const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN;
-    if (!verifyToken) {
-      console.error("[whatsapp] WHATSAPP_VERIFY_TOKEN secret not set");
-      return res.sendStatus(500);
-    }
-    if (mode === "subscribe" && token === verifyToken) {
-      console.log("[whatsapp] Webhook verified successfully");
-      return res.status(200).send(challenge);
-    }
-    console.warn("[whatsapp] Webhook verification failed — token mismatch");
-    return res.sendStatus(403);
+    res.sendStatus(200);
   });
 
   app.post("/webhook/whatsapp", async (req, res) => {
-    res.sendStatus(200); // respond immediately so Meta doesn't retry
+    res.sendStatus(200); // respond immediately so Green API doesn't retry
     try {
       const body = req.body;
-      if (body?.object !== "whatsapp_business_account") return;
 
-      const messages = body.entry?.[0]?.changes?.[0]?.value?.messages;
-      if (!Array.isArray(messages) || messages.length === 0) return;
+      // Green API webhook format
+      if (body?.typeWebhook !== "incomingMessageReceived") return;
+      if (body?.messageData?.typeMessage !== "textMessage") return;
 
-      for (const msg of messages) {
-        if (msg.type !== "text") continue;
-        const from: string = msg.from;
-        const text: string = (msg.text?.body ?? "").trim();
-        if (!from || !text) continue;
+      const from: string = body?.senderData?.chatId ?? "";
+      const text: string = (body?.messageData?.textMessageData?.textMessage ?? "").trim();
+      if (!from || !text) return;
+
+      // Process as single message (Green API sends one message per webhook)
+      {
 
         console.log(`[whatsapp] Message from ${from}: ${text.slice(0, 80)}`);
 
@@ -2230,14 +2222,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
               waStateMap.set(from, { stage: "awaiting_session", cdkKey: text, lastActivity: Date.now() });
               const planInfo = check.type ? ` (${check.type})` : "";
               await sendWhatsAppMessage(from, `✅ New key accepted${planInfo}!\n\nNow send your ChatGPT session token to activate.\n\n📋 Go to: chat.openai.com/api/auth/session\nCopy the full JSON text and send it here.`);
-              continue;
+              return;
             } else {
               // Looks like a CDK key but not valid — re-explain session token
               await sendWhatsAppMessage(from,
                 `⚠️ That does not look like a session token.\n\nYour CDK key is already verified. I need your ChatGPT session token now.\n\n📋 How to get it:\n1. Open your browser\n2. Go to: chat.openai.com/api/auth/session\n3. You will see a long JSON starting with {"user":...\n4. Copy ALL of it and send it here\n\nOr send a new CDK key to start over.`
               );
               waStateMap.set(from, state);
-              continue;
+              return;
             }
           }
 
