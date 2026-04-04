@@ -1730,10 +1730,66 @@ function ProductsTab() {
   );
 }
 
+function WhatsAppBotTab() {
+  const { data, isLoading, refetch } = useQuery<{ status: string; qr?: string }>({
+    queryKey: ["/api/admin/whatsapp/qr"],
+    refetchInterval: 5000,
+  });
+
+  return (
+    <div className="max-w-lg mx-auto py-8">
+      <h2 className="text-xl font-semibold mb-2">WhatsApp Bot</h2>
+      <p className="text-sm text-muted-foreground mb-6">
+        Scan the QR code below with your WhatsApp phone to activate the bot. Once connected, customers can send their CDK key to your number for automatic activation.
+      </p>
+      <div className="border border-border rounded-lg p-6 text-center bg-card">
+        {isLoading ? (
+          <div className="flex flex-col items-center gap-3 py-8">
+            <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">Checking connection status...</p>
+          </div>
+        ) : data?.status === "connected" ? (
+          <div className="flex flex-col items-center gap-3 py-8">
+            <div className="w-16 h-16 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
+              <svg className="w-8 h-8 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            <p className="font-semibold text-green-600">WhatsApp Connected</p>
+            <p className="text-sm text-muted-foreground">The bot is active and ready to handle customer messages.</p>
+          </div>
+        ) : data?.status === "qr" && data.qr ? (
+          <div className="flex flex-col items-center gap-4">
+            <p className="text-sm font-medium">Scan with WhatsApp to connect the bot</p>
+            <img src={data.qr} alt="WhatsApp QR Code" className="w-64 h-64 rounded-lg border border-border" data-testid="img-whatsapp-qr" />
+            <p className="text-xs text-muted-foreground">Open WhatsApp → Linked Devices → Link a Device → scan this code</p>
+            <button onClick={() => refetch()} className="text-xs text-primary underline" data-testid="button-refresh-qr">Refresh QR</button>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center gap-3 py-8">
+            <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">Waiting for QR code to be generated...</p>
+            <button onClick={() => refetch()} className="text-xs text-primary underline mt-2" data-testid="button-refresh-status">Refresh</button>
+          </div>
+        )}
+      </div>
+      <div className="mt-6 p-4 bg-muted/50 rounded-lg">
+        <p className="text-xs font-semibold mb-2">How it works:</p>
+        <ol className="text-xs text-muted-foreground space-y-1 list-decimal list-inside">
+          <li>Scan the QR code with your WhatsApp phone</li>
+          <li>Customers message your WhatsApp number with their CDK key</li>
+          <li>Bot verifies the key and asks for their ChatGPT session token</li>
+          <li>Bot activates their account automatically</li>
+        </ol>
+      </div>
+    </div>
+  );
+}
+
 export default function AdminPage() {
   const [, navigate] = useLocation();
   const { user, isAdmin, isLoading } = useAuth();
-  const [tab, setTab] = useState<"customers" | "orders" | "deposits" | "inventory" | "products" | "api-keys" | "settings">("customers");
+  const [tab, setTab] = useState<"customers" | "orders" | "deposits" | "inventory" | "products" | "api-keys" | "whatsapp" | "settings">("customers");
   const [balanceTarget, setBalanceTarget] = useState<{ customer: Customer; mode: "credit" | "debit" } | null>(null);
   const [ordersTarget, setOrdersTarget] = useState<Customer | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Customer | null>(null);
@@ -1823,7 +1879,7 @@ export default function AdminPage() {
 
       {/* Tabs */}
       <div className="flex gap-1 mb-5 border-b border-border overflow-x-auto">
-        {(["customers", "orders", "deposits", "inventory", "products", "api-keys", "settings"] as const).map((t) => (
+        {(["customers", "orders", "deposits", "inventory", "products", "api-keys", "whatsapp", "settings"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -1836,7 +1892,7 @@ export default function AdminPage() {
             {t === "deposits" && <ArrowDownToLine className="w-3.5 h-3.5" />}
             {t === "inventory" && <Key className="w-3.5 h-3.5" />}
             {t === "api-keys" && <Key className="w-3.5 h-3.5" />}
-            {t === "deposits" ? "Deposits" : t === "settings" ? "Settings" : t === "inventory" ? "Keys" : t === "api-keys" ? "API Keys" : t.charAt(0).toUpperCase() + t.slice(1)}
+            {t === "deposits" ? "Deposits" : t === "settings" ? "Settings" : t === "inventory" ? "Keys" : t === "api-keys" ? "API Keys" : t === "whatsapp" ? "WhatsApp Bot" : t.charAt(0).toUpperCase() + t.slice(1)}
           </button>
         ))}
       </div>
@@ -1988,6 +2044,9 @@ export default function AdminPage() {
 
       {/* API Keys tab */}
       {tab === "api-keys" && <AdminApiKeysTab />}
+
+      {/* WhatsApp Bot tab */}
+      {tab === "whatsapp" && <WhatsAppBotTab />}
 
       {/* Settings tab */}
       {tab === "settings" && <SettingsTab user={user} />}
