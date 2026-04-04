@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "72B8n5ZoavZEyamQ4g083"
+uri = "file://customers_export.csv"
+type = "table"
+title = "All Customers Export (177 customers)"
