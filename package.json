@@ -3,10 +3,9 @@
   "version": "1.0.0",
   "type": "module",
   "license": "MIT",
-  "engines": {"node": "20.x"},
   "scripts": {
     "dev": "NODE_ENV=development tsx server/index.ts",
-    "build": "npx tsx script/build.ts",
+    "build": "tsx script/build.ts",
     "start": "NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
     "db:push": "drizzle-kit push"
@@ -14,7 +13,6 @@
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
     "@jridgewell/trace-mapping": "^0.3.25",
-    "@octokit/rest": "^21.1.1",
     "@radix-ui/react-accordion": "^1.2.4",
     "@radix-ui/react-alert-dialog": "^1.1.7",
     "@radix-ui/react-aspect-ratio": "^1.1.3",
