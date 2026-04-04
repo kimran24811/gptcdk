@@ -67,11 +67,23 @@ export async function startWhatsApp(): Promise<void> {
 
   console.log("[whatsapp] Starting Baileys v" + version.join("."));
 
+  const silentLogger = {
+    level: "silent",
+    trace: () => {},
+    debug: () => {},
+    info: (msg: any) => console.log("[whatsapp]", typeof msg === "string" ? msg : JSON.stringify(msg)),
+    warn: (msg: any) => console.warn("[whatsapp]", typeof msg === "string" ? msg : JSON.stringify(msg)),
+    error: (msg: any) => console.error("[whatsapp]", typeof msg === "string" ? msg : JSON.stringify(msg)),
+    fatal: (msg: any) => console.error("[whatsapp] FATAL", msg),
+    child: () => silentLogger,
+  };
+
   sock = makeWASocket({
     version,
+    logger: silentLogger as any,
     auth: {
       creds: state.creds,
-      keys: makeCacheableSignalKeyStore(state.keys, console as any),
+      keys: makeCacheableSignalKeyStore(state.keys, silentLogger as any),
     },
     getMessage: async () => undefined,
     shouldIgnoreJid: (jid: string) => isJidBroadcast(jid),
