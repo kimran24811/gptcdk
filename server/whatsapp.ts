@@ -96,7 +96,6 @@ export async function startWhatsApp(): Promise<void> {
 
     if (connection === "close") {
       isConnected = false;
-      const { Boom } = require("@hapi/boom");
       const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
