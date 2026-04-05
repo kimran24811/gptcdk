@@ -1,0 +1,45 @@
+> rest-express@1.0.0 build
+Menu
+> tsx script/build.ts
+building client...
+vite v7.3.0 building client environment for production...
+transforming...
+Browserslist: browsers data (caniuse-lite) is 6 months old. Please run:
+  npx update-browserslist-db@latest
+  Why you should do it regularly: https://github.com/browserslist/update-db#readme
+✓ 1725 modules transformed.
+rendering chunks...
+computing gzip size...
+../dist/public/index.html                                 2.02 kB │ gzip:   0.77 kB
+../dist/public/assets/image_1774465922033-Cbx6b6TU.png   31.87 kB
+../dist/public/assets/index-0N76i_VI.css                 53.14 kB │ gzip:   9.58 kB
+../dist/public/assets/index-XEKVUyXb.js                 500.80 kB │ gzip: 146.13 kB
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 4.71s
+building server...
+✘ [ERROR] Could not resolve "bcryptjs"
+    server/routes.ts:3:19:
+      3 │ import bcrypt from "bcryptjs";
+        ╵                    ~~~~~~~~~~
+  You can mark the path "bcryptjs" as external to exclude it from the bundle, which will remove this error and leave the unresolved path in the bundle.
+1 error
+Error: Build failed with 1 error:
+server/routes.ts:3:19: ERROR: Could not resolve "bcryptjs"
+    at failureErrorWithLog (/opt/render/project/src/node_modules/esbuild/lib/main.js:1467:15)
+    at /opt/render/project/src/node_modules/esbuild/lib/main.js:926:25
+    at /opt/render/project/src/node_modules/esbuild/lib/main.js:878:52
+    at buildResponseToResult (/opt/render/project/src/node_modules/esbuild/lib/main.js:924:7)
+    at /opt/render/project/src/node_modules/esbuild/lib/main.js:951:16
+    at responseCallbacks.<computed> (/opt/render/project/src/node_modules/esbuild/lib/main.js:603:9)
+    at handleIncomingPacket (/opt/render/project/src/node_modules/esbuild/lib/main.js:658:12)
+    at Socket.readFromStdout (/opt/render/project/src/node_modules/esbuild/lib/main.js:581:7)
+    at Socket.emit (node:events:524:28)
+    at addChunk (node:internal/streams/readable:561:12) {
+  errors: [Getter/Setter],
+  warnings: [Getter/Setter]
+}
+==> Build failed 😞
+==> Common ways to troubleshoot your deploy: https://render.com/docs/troubleshooting-deploys
