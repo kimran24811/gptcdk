@@ -13,6 +13,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Loader2, Users, Package, DollarSign, Plus, Copy, Check, Settings, ArrowDownToLine, Key, Trash2, Search, Minus, ShoppingBag, AlertTriangle, RotateCcw, Archive, CalendarDays, User, Tag, Clock, ArrowUpCircle, ArrowDownCircle, Wallet, CreditCard, ChevronDown, ChevronUp, Upload, Bell, Store, Pencil, Eye, EyeOff, ExternalLink } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 
 const BINANCE_PAY_ID = "552780449";
 const BINANCE_USERNAME = "User-1d9f7";
@@ -1761,7 +1762,7 @@ function WhatsAppBotTab() {
         ) : data?.status === "qr" && data.qr ? (
           <div className="flex flex-col items-center gap-4">
             <p className="text-sm font-medium">Scan with WhatsApp to connect the bot</p>
-            <img src={data.qr} alt="WhatsApp QR Code" className="w-64 h-64 rounded-lg border border-border" data-testid="img-whatsapp-qr" />
+            <QRCodeSVG value={data.qr} size={256} data-testid="img-whatsapp-qr" />
             <p className="text-xs text-muted-foreground">Open WhatsApp → Linked Devices → Link a Device → scan this code</p>
             <button onClick={() => refetch()} className="text-xs text-primary underline" data-testid="button-refresh-qr">Refresh QR</button>
           </div>

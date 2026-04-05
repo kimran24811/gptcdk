@@ -1,6 +1,5 @@
 import fs from "fs";
 import path from "path";
-import QRCode from "qrcode";
 
 const AUTH_DIR = process.env.WA_AUTH_DIR || path.join(process.cwd(), "wa-auth");
 
@@ -19,13 +18,9 @@ export function getConnectionStatus() {
   return { isConnected, hasQR: !!currentQR };
 }
 
-export async function getQRCodeDataURL(): Promise<string | null> {
-  if (!currentQR) return null;
-  try {
-    return await QRCode.toDataURL(currentQR);
-  } catch {
-    return null;
-  }
+/** Returns the raw QR string — frontend renders it as a QR image */
+export function getRawQR(): string | null {
+  return currentQR;
 }
 
 export function setMessageHandler(handler: (from: string, text: string) => Promise<void>) {
