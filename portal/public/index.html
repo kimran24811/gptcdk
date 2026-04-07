@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ChatGPT Key Redemption Portal</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0d0d0d;
+      --surface: #161616;
+      --surface2: #1e1e1e;
+      --border: #2a2a2a;
+      --text: #f0f0f0;
+      --muted: #888;
+      --accent: #10a37f;
+      --accent-hover: #0d8f6e;
+      --accent-dim: rgba(16, 163, 127, 0.12);
+      --red: #e53e3e;
+      --red-dim: rgba(229, 62, 62, 0.12);
+      --yellow: #d69e2e;
+      --yellow-dim: rgba(214, 158, 46, 0.12);
+      --radius: 10px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 32px;
+    }
+    .logo-icon {
+      width: 36px;
+      height: 36px;
+      background: var(--accent);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .logo-icon svg { width: 20px; height: 20px; fill: #fff; }
+    .logo-text { font-size: 18px; font-weight: 600; letter-spacing: -0.3px; }
+
+    .card {
+      width: 100%;
+      max-width: 480px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 32px;
+    }
+
+    .steps {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 28px;
+    }
+    .step {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: var(--muted);
+      transition: color 0.2s;
+    }
+    .step.active { color: var(--text); }
+    .step.done { color: var(--accent); }
+    .step-num {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      border: 1.5px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 600;
+      transition: all 0.2s;
+      flex-shrink: 0;
+    }
+    .step.active .step-num {
+      border-color: var(--accent);
+      background: var(--accent-dim);
+      color: var(--accent);
+    }
+    .step.done .step-num {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #fff;
+    }
+    .step-divider {
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+
+    h2 {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 6px;
+      letter-spacing: -0.3px;
+    }
+    .subtitle {
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 24px;
+      line-height: 1.5;
+    }
+
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      margin-bottom: 6px;
+      color: var(--text);
+    }
+
+    input, textarea {
+      width: 100%;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      font-size: 14px;
+      padding: 11px 14px;
+      outline: none;
+      transition: border-color 0.2s;
+      font-family: inherit;
+    }
+    input:focus, textarea:focus { border-color: var(--accent); }
+    textarea { resize: vertical; min-height: 130px; font-size: 12px; font-family: "SF Mono", "Fira Code", monospace; line-height: 1.5; }
+
+    .input-group { margin-bottom: 20px; }
+
+    .hint {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 6px;
+      line-height: 1.5;
+    }
+    .hint a { color: var(--accent); text-decoration: none; }
+    .hint a:hover { text-decoration: underline; }
+
+    .btn {
+      width: 100%;
+      padding: 12px;
+      border-radius: var(--radius);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+    }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-ghost {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      margin-top: 10px;
+    }
+    .btn-ghost:hover { border-color: var(--text); color: var(--text); }
+
+    .alert {
+      border-radius: var(--radius);
+      padding: 12px 14px;
+      font-size: 13px;
+      line-height: 1.5;
+      margin-bottom: 20px;
+      display: none;
+    }
+    .alert.show { display: block; }
+    .alert-success { background: var(--accent-dim); border: 1px solid var(--accent); color: #2dd4bf; }
+    .alert-error   { background: var(--red-dim);    border: 1px solid var(--red);    color: #fc8181; }
+    .alert-warn    { background: var(--yellow-dim); border: 1px solid var(--yellow); color: #f6e05e; }
+
+    .key-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--accent-dim);
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 12px;
+      color: var(--accent);
+      font-weight: 600;
+      margin-bottom: 16px;
+    }
+
+    /* Success screen */
+    .success-screen {
+      text-align: center;
+      display: none;
+    }
+    .success-screen.show { display: block; }
+    .success-icon {
+      width: 64px;
+      height: 64px;
+      background: var(--accent-dim);
+      border: 2px solid var(--accent);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 20px;
+    }
+    .success-icon svg { width: 28px; height: 28px; stroke: var(--accent); fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+    .success-screen h2 { margin-bottom: 8px; }
+    .success-screen p { color: var(--muted); font-size: 14px; margin-bottom: 24px; line-height: 1.6; }
+
+    .info-grid {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      margin-bottom: 24px;
+      text-align: left;
+    }
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 14px;
+      font-size: 13px;
+      border-bottom: 1px solid var(--border);
+    }
+    .info-row:last-child { border-bottom: none; }
+    .info-label { color: var(--muted); }
+    .info-value { font-weight: 500; color: var(--text); word-break: break-all; text-align: right; max-width: 60%; }
+
+    .spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      display: none;
+    }
+    .spinner.show { display: block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .step-panel { display: none; }
+    .step-panel.active { display: block; }
+
+    footer {
+      margin-top: 24px;
+      font-size: 12px;
+      color: #444;
+      text-align: center;
+    }
+
+    @media (max-width: 520px) {
+      .card { padding: 24px 20px; }
+      .step span { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="logo">
+    <div class="logo-icon">
+      <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>
+    </div>
+    <span class="logo-text">Redemption Portal</span>
+  </div>
+
+  <div class="card">
+
+    <!-- Step Indicators -->
+    <div class="steps">
+      <div class="step active" id="ind-step1">
+        <div class="step-num">1</div>
+        <span>Validate Key</span>
+      </div>
+      <div class="step-divider"></div>
+      <div class="step" id="ind-step2">
+        <div class="step-num">2</div>
+        <span>Activate</span>
+      </div>
+    </div>
+
+    <!-- STEP 1: Validate Key -->
+    <div class="step-panel active" id="panel-step1">
+      <h2>Enter Your Key</h2>
+      <p class="subtitle">Enter your ChatGPT activation key to check if it's valid and ready to use.</p>
+
+      <div id="alert-step1" class="alert"></div>
+
+      <div class="input-group">
+        <label for="cdk-input">Activation Key</label>
+        <input id="cdk-input" type="text" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false" />
+      </div>
+
+      <button class="btn btn-primary" id="btn-validate" onclick="validateKey()">
+        <div class="spinner" id="spin1"></div>
+        <span id="btn-validate-text">Check Key</span>
+      </button>
+    </div>
+
+    <!-- STEP 2: Activate -->
+    <div class="step-panel" id="panel-step2">
+      <div class="key-badge">
+        <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Key Valid — <span id="key-type-label">ChatGPT Plus</span>
+      </div>
+
+      <h2>Paste Your Session</h2>
+      <p class="subtitle">Paste your ChatGPT session JSON below. This links your account to the key.</p>
+
+      <div id="alert-step2" class="alert"></div>
+
+      <div class="input-group">
+        <label for="session-input">ChatGPT Session JSON</label>
+        <textarea id="session-input" placeholder='{"accessToken":"eyJ...","user":{...}}'></textarea>
+        <p class="hint">
+          1. Open <a href="https://chatgpt.com/api/auth/session" target="_blank" rel="noopener">chatgpt.com/api/auth/session</a> while logged in.<br>
+          2. Copy all the text and paste it here.
+        </p>
+      </div>
+
+      <button class="btn btn-primary" id="btn-activate" onclick="activateKey()">
+        <div class="spinner" id="spin2"></div>
+        <span id="btn-activate-text">Activate ChatGPT</span>
+      </button>
+      <button class="btn btn-ghost" onclick="goBack()">&#8592; Use a different key</button>
+    </div>
+
+    <!-- SUCCESS screen -->
+    <div class="success-screen" id="success-screen">
+      <div class="success-icon">
+        <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>
+      </div>
+      <h2>Activation Successful!</h2>
+      <p>Your ChatGPT subscription has been activated.</p>
+      <div class="info-grid" id="success-info"></div>
+      <button class="btn btn-primary" onclick="resetPortal()">Activate Another Key</button>
+    </div>
+
+  </div>
+
+  <footer>Powered by keys.ovh</footer>
+
+  <script>
+    let validatedKey = "";
+
+    function showAlert(id, type, msg) {
+      const el = document.getElementById(id);
+      el.className = `alert alert-${type} show`;
+      el.textContent = msg;
+    }
+    function hideAlert(id) {
+      const el = document.getElementById(id);
+      el.className = "alert";
+      el.textContent = "";
+    }
+    function setLoading(btnId, spinId, textId, loading, label) {
+      document.getElementById(btnId).disabled = loading;
+      document.getElementById(spinId).className = loading ? "spinner show" : "spinner";
+      document.getElementById(textId).textContent = loading ? "Please wait..." : label;
+    }
+    function showStep(n) {
+      document.querySelectorAll(".step-panel").forEach(p => p.classList.remove("active"));
+      document.getElementById(`panel-step${n}`).classList.add("active");
+
+      document.querySelectorAll(".step").forEach((s, i) => {
+        s.classList.remove("active", "done");
+        if (i + 1 < n) s.classList.add("done");
+        if (i + 1 === n) s.classList.add("active");
+      });
+      // Mark done step checkmark
+      document.querySelectorAll(".step.done .step-num").forEach(el => {
+        el.innerHTML = `<svg width="12" height="12" fill="none" stroke="#fff" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+      });
+      document.querySelectorAll(".step.active .step-num, .step:not(.done):not(.active) .step-num").forEach((el, i) => {
+        if (!el.querySelector("polyline")) el.textContent = el.closest(".step").id === "ind-step1" ? "1" : "2";
+      });
+    }
+
+    async function validateKey() {
+      const key = document.getElementById("cdk-input").value.trim();
+      if (!key) { showAlert("alert-step1", "warn", "Please enter your activation key."); return; }
+      hideAlert("alert-step1");
+      setLoading("btn-validate", "spin1", "btn-validate-text", true, "Check Key");
+
+      try {
+        const res = await fetch("/api/validate-key", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ key }),
+        });
+        const data = await res.json();
+        if (data.valid) {
+          validatedKey = key;
+          document.getElementById("key-type-label").textContent = data.type || "ChatGPT Plus";
+          showStep(2);
+          document.getElementById("success-screen").classList.remove("show");
+          document.getElementById("panel-step2").classList.add("active");
+        } else {
+          showAlert("alert-step1", "error", data.message || "Invalid key. Please check and try again.");
+        }
+      } catch {
+        showAlert("alert-step1", "error", "Could not reach the server. Please try again.");
+      } finally {
+        setLoading("btn-validate", "spin1", "btn-validate-text", false, "Check Key");
+      }
+    }
+
+    async function activateKey() {
+      const sessionData = document.getElementById("session-input").value.trim();
+      if (!sessionData) { showAlert("alert-step2", "warn", "Please paste your ChatGPT session JSON."); return; }
+      hideAlert("alert-step2");
+      setLoading("btn-activate", "spin2", "btn-activate-text", true, "Activate ChatGPT");
+
+      try {
+        const res = await fetch("/api/activate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ key: validatedKey, sessionData }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          showSuccessScreen(data);
+        } else {
+          showAlert("alert-step2", "error", data.message || "Activation failed. Please try again.");
+        }
+      } catch {
+        showAlert("alert-step2", "error", "Could not reach the server. Please try again.");
+      } finally {
+        setLoading("btn-activate", "spin2", "btn-activate-text", false, "Activate ChatGPT");
+      }
+    }
+
+    function showSuccessScreen(data) {
+      document.querySelectorAll(".step-panel").forEach(p => p.classList.remove("active"));
+      document.querySelectorAll(".step").forEach(s => s.classList.add("done"));
+      document.querySelectorAll(".step.done .step-num").forEach(el => {
+        el.innerHTML = `<svg width="12" height="12" fill="none" stroke="#fff" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+      });
+
+      const rows = [
+        data.email       ? ["Account",      data.email]       : null,
+        data.subscription? ["Subscription", data.subscription] : null,
+        data.product     ? ["Product",       data.product]     : null,
+        data.activatedAt ? ["Activated At",  new Date(data.activatedAt).toLocaleString()] : null,
+      ].filter(Boolean);
+
+      document.getElementById("success-info").innerHTML = rows.map(([label, value]) => `
+        <div class="info-row">
+          <span class="info-label">${label}</span>
+          <span class="info-value">${value}</span>
+        </div>
+      `).join("");
+
+      document.getElementById("success-screen").classList.add("show");
+    }
+
+    function goBack() {
+      hideAlert("alert-step2");
+      document.getElementById("session-input").value = "";
+      showStep(1);
+    }
+
+    function resetPortal() {
+      validatedKey = "";
+      document.getElementById("cdk-input").value = "";
+      document.getElementById("session-input").value = "";
+      hideAlert("alert-step1");
+      hideAlert("alert-step2");
+      document.getElementById("success-screen").classList.remove("show");
+      showStep(1);
+    }
+
+    // Allow Enter key on CDK input
+    document.getElementById("cdk-input").addEventListener("keydown", e => {
+      if (e.key === "Enter") validateKey();
+    });
+  </script>
+</body>
+</html>
