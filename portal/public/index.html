@@ -273,9 +273,122 @@
       text-align: center;
     }
 
+    .alert-multiline { white-space: pre-line; }
+
+    .session-valid-badge {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      background: var(--accent-dim);
+      border: 1px solid var(--accent);
+      border-radius: var(--radius);
+      padding: 10px 14px;
+      font-size: 13px;
+      color: #2dd4bf;
+      margin-bottom: 16px;
+    }
+    .session-valid-badge.show { display: flex; }
+    .session-valid-badge svg { flex-shrink: 0; }
+
+    .membership-warn {
+      display: none;
+      background: var(--yellow-dim);
+      border: 1px solid var(--yellow);
+      border-radius: var(--radius);
+      padding: 10px 14px;
+      font-size: 13px;
+      color: #f6e05e;
+      margin-bottom: 16px;
+      line-height: 1.5;
+    }
+    .membership-warn.show { display: block; }
+
+    /* Batch check modal */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.7);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+    .modal-overlay.show { display: flex; }
+    .modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 28px;
+      width: 100%;
+      max-width: 580px;
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+    .modal-header h2 { font-size: 18px; }
+    .modal-close {
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 20px;
+      line-height: 1;
+      padding: 4px;
+    }
+    .modal-close:hover { color: var(--text); }
+
+    .batch-results { margin-top: 20px; }
+    .batch-result-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: start;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }
+    .batch-result-row:last-child { border-bottom: none; }
+    .batch-key { font-family: "SF Mono","Fira Code",monospace; font-size: 12px; color: var(--muted); word-break: break-all; }
+    .batch-detail { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 3px 9px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .badge-available { background: var(--accent-dim); color: var(--accent); border: 1px solid var(--accent); }
+    .badge-used      { background: var(--red-dim);    color: #fc8181;       border: 1px solid var(--red); }
+    .badge-expired   { background: var(--yellow-dim); color: #f6e05e;       border: 1px solid var(--yellow); }
+    .badge-invalid   { background: #1a1a1a;           color: var(--muted);  border: 1px solid var(--border); }
+
+    .btn-link {
+      background: none;
+      border: none;
+      color: var(--accent);
+      font-size: 13px;
+      cursor: pointer;
+      padding: 0;
+      margin-top: 12px;
+      display: block;
+      text-align: center;
+      width: 100%;
+    }
+    .btn-link:hover { text-decoration: underline; }
+
     @media (max-width: 520px) {
       .card { padding: 24px 20px; }
       .step span { display: none; }
+      .modal { padding: 20px 16px; }
     }
   </style>
 </head>
@@ -319,6 +432,7 @@
         <div class="spinner" id="spin1"></div>
         <span id="btn-validate-text">Check Key</span>
       </button>
+      <button class="btn-link" onclick="openBatch()">&#9776; Batch Check Multiple Keys</button>
     </div>
 
     <!-- STEP 2: Activate -->
@@ -342,6 +456,20 @@
         </p>
       </div>
 
+      <button class="btn btn-ghost" id="btn-validate-session" onclick="validateSession()" style="margin-bottom:12px;">
+        <div class="spinner" id="spin-vs"></div>
+        <span id="btn-vs-text">Validate Session</span>
+      </button>
+
+      <div class="session-valid-badge" id="session-valid-badge">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span id="session-valid-text">Session valid</span>
+      </div>
+
+      <div class="membership-warn" id="membership-warn">
+        &#9888; This account already has an active membership. Activating this key will <strong>replace</strong> the existing subscription with the new one.
+      </div>
+
       <button class="btn btn-primary" id="btn-activate" onclick="activateKey()">
         <div class="spinner" id="spin2"></div>
         <span id="btn-activate-text">Activate ChatGPT</span>
@@ -362,7 +490,30 @@
 
   </div>
 
-  <footer>Powered by keys.ovh</footer>
+  <!-- Batch Check Modal -->
+  <div class="modal-overlay" id="batch-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>Batch Check Keys</h2>
+        <button class="modal-close" onclick="closeBatch()">&#x2715;</button>
+      </div>
+      <p class="subtitle">Paste one activation key per line. Up to 100 keys at once.</p>
+
+      <div class="input-group">
+        <label for="batch-input">Activation Keys (one per line)</label>
+        <textarea id="batch-input" placeholder="KEY-ONE&#10;KEY-TWO&#10;KEY-THREE" style="min-height:160px;"></textarea>
+      </div>
+
+      <button class="btn btn-primary" id="btn-batch" onclick="runBatchCheck()">
+        <div class="spinner" id="spin-batch"></div>
+        <span id="btn-batch-text">Check All Keys</span>
+      </button>
+
+      <div class="batch-results" id="batch-results"></div>
+    </div>
+  </div>
+
+  <footer></footer>
 
   <script>
     let validatedKey = "";
@@ -370,6 +521,11 @@
     function showAlert(id, type, msg) {
       const el = document.getElementById(id);
       el.className = `alert alert-${type} show`;
+      el.textContent = msg;
+    }
+    function showAlertMultiline(id, type, msg) {
+      const el = document.getElementById(id);
+      el.className = `alert alert-${type} show alert-multiline`;
       el.textContent = msg;
     }
     function hideAlert(id) {
@@ -419,6 +575,11 @@
           showStep(2);
           document.getElementById("success-screen").classList.remove("show");
           document.getElementById("panel-step2").classList.add("active");
+        } else if (data.status === "used") {
+          let msg = data.message || "This key has already been activated.";
+          if (data.activatedFor) msg += `\nAccount: ${data.activatedFor}`;
+          if (data.activatedAt) msg += `\nActivated: ${new Date(data.activatedAt).toLocaleString()}`;
+          showAlertMultiline("alert-step1", "error", msg);
         } else {
           showAlert("alert-step1", "error", data.message || "Invalid key. Please check and try again.");
         }
@@ -478,9 +639,50 @@
       document.getElementById("success-screen").classList.add("show");
     }
 
+    async function validateSession() {
+      const sessionData = document.getElementById("session-input").value.trim();
+      if (!sessionData) { showAlert("alert-step2", "warn", "Please paste your ChatGPT session JSON first."); return; }
+      hideAlert("alert-step2");
+      document.getElementById("session-valid-badge").classList.remove("show");
+      document.getElementById("membership-warn").classList.remove("show");
+      document.getElementById("btn-validate-session").disabled = true;
+      document.getElementById("spin-vs").className = "spinner show";
+      document.getElementById("btn-vs-text").textContent = "Validating...";
+
+      try {
+        const res = await fetch("/api/validate-session", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionData }),
+        });
+        const data = await res.json();
+        if (data.valid) {
+          const badge = document.getElementById("session-valid-badge");
+          let info = "Session valid";
+          if (data.email) info += ` — ${data.email}`;
+          if (data.planType && data.planType !== "free") info += ` (${data.planType})`;
+          document.getElementById("session-valid-text").textContent = info;
+          badge.classList.add("show");
+          if (data.hasPaidPlan) {
+            document.getElementById("membership-warn").classList.add("show");
+          }
+        } else {
+          showAlert("alert-step2", "error", data.message || "Invalid session.");
+        }
+      } catch {
+        showAlert("alert-step2", "error", "Could not reach the server. Please try again.");
+      } finally {
+        document.getElementById("btn-validate-session").disabled = false;
+        document.getElementById("spin-vs").className = "spinner";
+        document.getElementById("btn-vs-text").textContent = "Validate Session";
+      }
+    }
+
     function goBack() {
       hideAlert("alert-step2");
       document.getElementById("session-input").value = "";
+      document.getElementById("session-valid-badge").classList.remove("show");
+      document.getElementById("membership-warn").classList.remove("show");
       showStep(1);
     }
 
@@ -488,10 +690,92 @@
       validatedKey = "";
       document.getElementById("cdk-input").value = "";
       document.getElementById("session-input").value = "";
+      document.getElementById("session-valid-badge").classList.remove("show");
+      document.getElementById("membership-warn").classList.remove("show");
       hideAlert("alert-step1");
       hideAlert("alert-step2");
       document.getElementById("success-screen").classList.remove("show");
       showStep(1);
+    }
+
+    // ── Batch Check ──────────────────────────────────────────────────────────
+    function openBatch() {
+      document.getElementById("batch-modal").classList.add("show");
+    }
+    function closeBatch() {
+      document.getElementById("batch-modal").classList.remove("show");
+    }
+    // Close modal on overlay click
+    document.getElementById("batch-modal").addEventListener("click", e => {
+      if (e.target === document.getElementById("batch-modal")) closeBatch();
+    });
+
+    async function runBatchCheck() {
+      const raw = document.getElementById("batch-input").value.trim();
+      if (!raw) return;
+      const keys = raw.split("\n").map(k => k.trim()).filter(Boolean);
+      if (keys.length === 0) return;
+      if (keys.length > 100) { alert("Maximum 100 keys per batch."); return; }
+
+      document.getElementById("btn-batch").disabled = true;
+      document.getElementById("spin-batch").className = "spinner show";
+      document.getElementById("btn-batch-text").textContent = `Checking ${keys.length} keys...`;
+      document.getElementById("batch-results").innerHTML = "";
+
+      try {
+        const res = await fetch("/api/batch-check", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ keys }),
+        });
+        const data = await res.json();
+        if (!data.success) { alert(data.message || "Batch check failed."); return; }
+
+        const available = data.results.filter(r => r.status === "available").length;
+        const used      = data.results.filter(r => r.status === "used").length;
+        const expired   = data.results.filter(r => r.status === "expired").length;
+        const invalid   = data.results.filter(r => !["available","used","expired"].includes(r.status)).length;
+
+        const summary = `<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;font-size:13px;">
+          <span class="badge badge-available">&#10003; ${available} Available</span>
+          <span class="badge badge-used">&#10007; ${used} Used</span>
+          ${expired ? `<span class="badge badge-expired">&#9651; ${expired} Expired</span>` : ""}
+          ${invalid ? `<span class="badge badge-invalid">? ${invalid} Invalid</span>` : ""}
+        </div>`;
+
+        const rows = data.results.map(r => {
+          let badge = "";
+          let detail = "";
+          if (r.status === "available") {
+            badge = `<span class="badge badge-available">Available</span>`;
+            if (r.type) detail = r.type;
+          } else if (r.status === "used") {
+            badge = `<span class="badge badge-used">Used</span>`;
+            if (r.activatedFor) detail += r.activatedFor;
+            if (r.activatedAt) detail += (detail ? " &bull; " : "") + new Date(r.activatedAt).toLocaleDateString();
+          } else if (r.status === "expired") {
+            badge = `<span class="badge badge-expired">Expired</span>`;
+          } else {
+            badge = `<span class="badge badge-invalid">Invalid</span>`;
+            if (r.message) detail = r.message;
+          }
+          return `<div class="batch-result-row">
+            <div>
+              <div class="batch-key">${r.key}</div>
+              ${detail ? `<div class="batch-detail">${detail}</div>` : ""}
+            </div>
+            ${badge}
+          </div>`;
+        }).join("");
+
+        document.getElementById("batch-results").innerHTML = summary + rows;
+      } catch {
+        alert("Could not reach the server. Please try again.");
+      } finally {
+        document.getElementById("btn-batch").disabled = false;
+        document.getElementById("spin-batch").className = "spinner";
+        document.getElementById("btn-batch-text").textContent = "Check All Keys";
+      }
     }
 
     // Allow Enter key on CDK input
