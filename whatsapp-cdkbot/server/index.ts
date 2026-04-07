@@ -24,7 +24,7 @@ app.use("/api/orders", ordersRouter);
 
 // Serve React build in production
 if (process.env.NODE_ENV === "production") {
-  const clientDist = path.join(__dirname, "../client/dist");
+  const clientDist = path.join(__dirname, "public");
   app.use(express.static(clientDist));
   app.get("*", (_req, res) => res.sendFile(path.join(clientDist, "index.html")));
 }
