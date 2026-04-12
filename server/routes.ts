@@ -322,6 +322,7 @@ async function suppyCheckKey(code: string): Promise<{
   plan?: string; term?: string; activatedEmail?: string | null; activatedAt?: number | null;
 } | null> {
   const res = await suppyFetch("GET", `/chatgpt/keys/${encodeURIComponent(code.trim())}`);
+  console.log("[suppy] checkKey status:", res.status, "data:", JSON.stringify(res.data));
   if (res.status === 404) return { found: false };
   if (!res.ok || !res.data || typeof res.data !== "object") return null;
   const d = res.data;
