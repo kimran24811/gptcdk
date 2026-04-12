@@ -623,129 +623,104 @@ export default function ShopPage() {
       </section>}
 
       {/* ── Page Header ───────────────────────────────────────────────────── */}
-      <section className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-8 pb-4">
-        <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
-          <div>
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/10 border border-primary/20 text-primary text-xs font-semibold mb-3">
-              <Zap className="w-3 h-3 fill-primary" />
-              Premium AI Subscriptions
-            </div>
-            <h1 className="text-3xl sm:text-4xl font-black text-foreground tracking-tight">Shop</h1>
-            <p className="text-muted-foreground text-sm mt-1">Instant delivery · Pay with crypto · No account needed</p>
-          </div>
-          <div className="flex items-center gap-6 pb-1">
-            <div className="text-center">
-              <p className="text-xl font-black text-foreground">10k+</p>
-              <p className="text-xs text-muted-foreground">Activations</p>
-            </div>
-            <div className="w-px h-8 bg-border" />
-            <div className="text-center">
-              <p className="text-xl font-black text-foreground">99.9%</p>
-              <p className="text-xs text-muted-foreground">Uptime</p>
-            </div>
-            <div className="w-px h-8 bg-border" />
-            <div className="text-center">
-              <p className="text-xl font-black text-primary">24/7</p>
-              <p className="text-xs text-muted-foreground">Support</p>
-            </div>
-          </div>
-        </div>
+      <section className="max-w-6xl mx-auto px-3 sm:px-4 lg:px-6 pt-6 pb-3">
+        <h1 className="text-2xl sm:text-3xl font-black text-foreground tracking-tight">Shop</h1>
+        <p className="text-muted-foreground text-xs mt-1">Instant delivery · Crypto payment · 10k+ activations</p>
       </section>
 
       {/* ── Plans ─────────────────────────────────────────────────────────── */}
-      <section id="plans" className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest mb-5">ChatGPT & Claude Plans</p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+      <section id="plans" className="max-w-6xl mx-auto px-3 sm:px-4 lg:px-6 py-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2.5 sm:gap-3">
           {PLANS.map((plan) => (
             <div
               key={plan.id}
-              className={`relative rounded-2xl border p-5 flex flex-col transition-all duration-200 ${
+              className={`relative rounded-xl border p-3.5 flex flex-col transition-all duration-200 ${
                 plan.popular
-                  ? "border-primary/60 bg-primary/5 shadow-lg shadow-primary/10 hover:shadow-primary/20"
+                  ? "border-primary/60 bg-primary/5 shadow-md shadow-primary/10 hover:shadow-primary/20"
                   : "border-border bg-card hover:border-primary/30"
               }`}
               data-testid={`plan-card-${plan.id}`}
             >
               {plan.popular && (
-                <div className="absolute -top-3 left-1/2 -translate-x-1/2 z-10">
-                  <span className="inline-flex items-center gap-1.5 bg-primary text-primary-foreground text-xs font-bold px-3 py-1 rounded-full shadow-lg shadow-primary/30">
-                    <Star className="w-3 h-3 fill-current" />
+                <div className="absolute -top-2.5 left-1/2 -translate-x-1/2 z-10">
+                  <span className="inline-flex items-center gap-1 bg-primary text-primary-foreground text-[10px] font-bold px-2 py-0.5 rounded-full shadow-md shadow-primary/30">
+                    <Star className="w-2.5 h-2.5 fill-current" />
                     Popular
                   </span>
                 </div>
               )}
 
-              <div className="flex items-center gap-2 mb-4 mt-1">
-                <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-muted/60 border border-border text-xs font-medium text-muted-foreground">
-                  <Clock className="w-3 h-3" />
+              <div className="flex items-center gap-1.5 mb-2.5 mt-1">
+                <div className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-muted/60 border border-border text-[10px] font-medium text-muted-foreground">
+                  <Clock className="w-2.5 h-2.5" />
                   {plan.duration}
                 </div>
               </div>
 
-              <h3 className="text-base font-bold text-foreground leading-tight mb-4">{plan.name}</h3>
+              <h3 className="text-xs font-bold text-foreground leading-tight mb-2.5">{plan.name}</h3>
 
-              <div className="mb-4">
-                <span className="text-4xl font-black text-foreground">${plan.price.toFixed(2)}</span>
-                <span className="text-sm text-muted-foreground ml-1.5">USDT</span>
+              <div className="mb-2.5">
+                <span className="text-2xl font-black text-foreground">${plan.price.toFixed(2)}</span>
+                <span className="text-xs text-muted-foreground ml-1">USDT</span>
               </div>
 
-              <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-5 mt-auto">
-                <Zap className="w-3.5 h-3.5 text-primary shrink-0" />
-                <span>Automatic delivery</span>
+              <div className="flex items-center gap-1 text-[10px] text-muted-foreground mb-3 mt-auto">
+                <Zap className="w-3 h-3 text-primary shrink-0" />
+                <span>Auto delivery</span>
               </div>
 
               <button
                 onClick={() => setOrderPlan(plan)}
                 data-testid={`button-get-now-${plan.id}`}
-                className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-bold transition-all duration-200 ${
+                className={`w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold transition-all duration-200 ${
                   plan.popular
-                    ? "bg-primary text-primary-foreground hover:bg-primary/90 shadow-md shadow-primary/20"
+                    ? "bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm shadow-primary/20"
                     : "bg-transparent border border-border text-foreground hover:border-primary/50 hover:bg-primary/5"
                 }`}
               >
-                Get Now <ArrowRight className="w-3.5 h-3.5" />
+                Get Now <ArrowRight className="w-3 h-3" />
               </button>
             </div>
           ))}
 
           {/* Claude Pro card */}
           <div
-            className="relative rounded-2xl border border-[#D97757]/40 bg-[#D97757]/5 p-5 flex flex-col transition-all duration-200 hover:border-[#D97757]/60 hover:shadow-lg hover:shadow-[#D97757]/10"
+            className="relative rounded-xl border border-[#D97757]/40 bg-[#D97757]/5 p-3.5 flex flex-col transition-all duration-200 hover:border-[#D97757]/60 hover:shadow-md hover:shadow-[#D97757]/10"
             data-testid="plan-card-claude"
           >
-            <div className="absolute -top-3 left-1/2 -translate-x-1/2 z-10">
-              <span className="inline-flex items-center gap-1.5 bg-[#D97757] text-white text-xs font-bold px-3 py-1 rounded-full shadow-lg shadow-[#D97757]/30">
+            <div className="absolute -top-2.5 left-1/2 -translate-x-1/2 z-10">
+              <span className="inline-flex items-center gap-1 bg-[#D97757] text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-md shadow-[#D97757]/30">
                 <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
                 New
               </span>
             </div>
 
-            <div className="flex items-center gap-2 mb-4 mt-1">
-              <img src={claudeLogoPath} alt="Claude" className="w-6 h-6 rounded-md shrink-0" />
-              <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-[#D97757]/10 border border-[#D97757]/20 text-xs font-medium text-[#D97757]">
-                <Clock className="w-3 h-3" />
+            <div className="flex items-center gap-1.5 mb-2.5 mt-1">
+              <img src={claudeLogoPath} alt="Claude" className="w-5 h-5 rounded-md shrink-0" />
+              <div className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-[#D97757]/10 border border-[#D97757]/20 text-[10px] font-medium text-[#D97757]">
+                <Clock className="w-2.5 h-2.5" />
                 Weekly
               </div>
             </div>
 
-            <h3 className="text-base font-bold text-foreground leading-tight mb-4">Claude Pro</h3>
+            <h3 className="text-xs font-bold text-foreground leading-tight mb-2.5">Claude Pro</h3>
 
-            <div className="mb-4">
-              <span className="text-4xl font-black text-foreground">$2.30</span>
-              <span className="text-sm text-muted-foreground ml-1.5">USDT</span>
+            <div className="mb-2.5">
+              <span className="text-2xl font-black text-foreground">$2.30</span>
+              <span className="text-xs text-muted-foreground ml-1">USDT</span>
             </div>
 
-            <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-5 mt-auto">
-              <MessageCircle className="w-3.5 h-3.5 text-[#D97757] shrink-0" />
+            <div className="flex items-center gap-1 text-[10px] text-muted-foreground mb-3 mt-auto">
+              <MessageCircle className="w-3 h-3 text-[#D97757] shrink-0" />
               <span>Via WhatsApp</span>
             </div>
 
             <button
-              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-bold bg-[#D97757] hover:bg-[#c9673f] text-white transition-all duration-200 shadow-md shadow-[#D97757]/20"
+              className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold bg-[#D97757] hover:bg-[#c9673f] text-white transition-all duration-200 shadow-sm shadow-[#D97757]/20"
               onClick={() => setShowClaude(true)}
               data-testid="button-get-now-claude"
             >
-              Get Now <ArrowRight className="w-3.5 h-3.5" />
+              Get Now <ArrowRight className="w-3 h-3" />
             </button>
           </div>
         </div>
@@ -753,56 +728,56 @@ export default function ShopPage() {
 
       {/* ── Custom Products ───────────────────────────────────────────────── */}
       {(customProductsData?.data?.length ?? 0) > 0 && (
-        <section className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex items-center gap-3 mb-5">
+        <section className="max-w-6xl mx-auto px-3 sm:px-4 lg:px-6 py-3">
+          <div className="flex items-center gap-3 mb-4">
             <div className="h-px flex-1 bg-border" />
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">Additional Services</p>
+            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">More Services</p>
             <div className="h-px flex-1 bg-border" />
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5 sm:gap-3">
             {customProductsData!.data.map((p) => (
               <div
                 key={p.id}
-                className="relative rounded-2xl border border-border bg-card p-5 flex flex-col hover:border-primary/30 transition-all duration-200"
+                className="relative rounded-xl border border-border bg-card p-3.5 flex flex-col hover:border-primary/30 transition-all duration-200"
                 data-testid={`custom-product-card-${p.id}`}
               >
-                <div className="flex items-center gap-2 mb-4">
+                <div className="flex items-center gap-1.5 mb-2.5">
                   {p.logoData ? (
-                    <img src={p.logoData} alt={p.name} className="w-8 h-8 rounded-lg object-cover shrink-0 border border-border" />
+                    <img src={p.logoData} alt={p.name} className="w-6 h-6 rounded-md object-cover shrink-0 border border-border" />
                   ) : (
-                    <div className="w-8 h-8 rounded-lg bg-muted/40 flex items-center justify-center shrink-0 border border-border">
-                      <Store className="w-4 h-4 text-muted-foreground/40" />
+                    <div className="w-6 h-6 rounded-md bg-muted/40 flex items-center justify-center shrink-0 border border-border">
+                      <Store className="w-3 h-3 text-muted-foreground/40" />
                     </div>
                   )}
-                  <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-muted/60 border border-border text-xs font-medium text-muted-foreground">
-                    <Zap className="w-3 h-3" />
+                  <div className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-muted/60 border border-border text-[10px] font-medium text-muted-foreground">
+                    <Zap className="w-2.5 h-2.5" />
                     Instant
                   </div>
                 </div>
 
-                <h3 className="text-base font-bold text-foreground leading-tight mb-1">{p.name}</h3>
-                {p.description && <p className="text-xs text-muted-foreground mb-4">{p.description}</p>}
+                <h3 className="text-xs font-bold text-foreground leading-tight mb-1">{p.name}</h3>
+                {p.description && <p className="text-[10px] text-muted-foreground mb-2.5 line-clamp-2">{p.description}</p>}
 
-                <div className="mb-4 mt-auto">
-                  <span className="text-4xl font-black text-foreground">${(p.priceCents / 100).toFixed(2)}</span>
-                  <span className="text-sm text-muted-foreground ml-1.5">USDT</span>
+                <div className="mb-2.5 mt-auto">
+                  <span className="text-2xl font-black text-foreground">${(p.priceCents / 100).toFixed(2)}</span>
+                  <span className="text-xs text-muted-foreground ml-1">USDT</span>
                 </div>
 
-                <div className="flex items-center justify-between mb-5">
-                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <Package className="w-3.5 h-3.5 text-primary shrink-0" />
-                    <span>Voucher code delivery</span>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                    <Package className="w-3 h-3 text-primary shrink-0" />
+                    <span>Code delivery</span>
                   </div>
-                  {p.stock === 0 && <span className="text-xs text-red-500 font-semibold">Out of stock</span>}
+                  {p.stock === 0 && <span className="text-[10px] text-red-500 font-semibold">Out of stock</span>}
                 </div>
 
                 <button
                   onClick={() => p.stock > 0 ? setCustomPurchaseTarget(p) : undefined}
                   disabled={p.stock === 0}
-                  className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-bold border border-border text-foreground hover:border-primary/50 hover:bg-primary/5 transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold border border-border text-foreground hover:border-primary/50 hover:bg-primary/5 transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
                   data-testid={`button-buy-custom-${p.id}`}
                 >
-                  {p.stock === 0 ? "Out of Stock" : (<>Get Now <ArrowRight className="w-3.5 h-3.5" /></>)}
+                  {p.stock === 0 ? "Out of Stock" : (<>Get Now <ArrowRight className="w-3 h-3" /></>)}
                 </button>
               </div>
             ))}
@@ -811,17 +786,17 @@ export default function ShopPage() {
       )}
 
       {/* ── Features strip ────────────────────────────────────────────────── */}
-      <section className="border-t border-border mt-4">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <section className="border-t border-border mt-3">
+        <div className="max-w-6xl mx-auto px-3 sm:px-4 lg:px-6 py-4">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
             {FEATURES.map((f) => (
-              <div key={f.title} className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 hover:border-primary/20 transition-colors">
-                <div className={`w-8 h-8 rounded-lg ${f.bg} flex items-center justify-center shrink-0`}>
-                  <f.icon className={`w-4 h-4 ${f.color}`} />
+              <div key={f.title} className="flex items-center gap-2.5 rounded-xl border border-border bg-card px-3 py-2.5 hover:border-primary/20 transition-colors">
+                <div className={`w-7 h-7 rounded-lg ${f.bg} flex items-center justify-center shrink-0`}>
+                  <f.icon className={`w-3.5 h-3.5 ${f.color}`} />
                 </div>
                 <div className="min-w-0">
-                  <p className="text-xs font-bold text-foreground">{f.title}</p>
-                  <p className="text-xs text-muted-foreground leading-tight hidden sm:block truncate">{f.desc}</p>
+                  <p className="text-[11px] font-bold text-foreground">{f.title}</p>
+                  <p className="text-[10px] text-muted-foreground leading-tight hidden sm:block">{f.desc}</p>
                 </div>
               </div>
             ))}
