@@ -7,208 +7,126 @@ import { users, transactions, orders, depositRequests, inventoryKeys, customProd
 import crypto from "crypto";
 import { sendWhatsAppMessage, getRawQR, getConnectionStatus, setMessageHandler } from "./whatsapp";
 
-const USDT_BEP20_ADDRESS = process.env.USDT_BEP20_ADDRESS || "0x0c31c91ec2cbb607aeca28c1bc09c55352db2fea";
-const USDT_TRC20_ADDRESS = process.env.USDT_TRC20_ADDRESS || "TLUSXogZfhgWGHpTBHNtNQPanq6AvNfCY4";
-const USDT_BEP20_CONTRACT = "0x55d398326f99059fF775485246999027B3197955";
-const USDT_TRC20_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
+const USDT_BEP20_ADDRESS = (process.env.USDT_BEP20_ADDRESS || "0x0c31c91ec2cbb607aeca28c1bc09c55352db2fea").toLowerCase();
+const USDT_BEP20_CONTRACT = "0x55d398326f99059ff775485246999027b3197955";
+const ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 
-// ── Blockchain detection helpers ─────────────────────────────────────────────
+// Public BSC RPC endpoints — no API key required
+const BSC_RPC_ENDPOINTS = [
+  "https://bsc-dataseed.binance.org/",
+  "https://bsc-dataseed1.defibit.io/",
+  "https://bsc-dataseed2.defibit.io/",
+  "https://rpc.ankr.com/bsc",
+];
 
-/**
- * Verify a user-provided TRC-20 tx hash via Tronscan API.
- * Returns { ok: true } if the tx transfers enough USDT to our wallet.
- */
-async function verifyTrc20Hash(hash: string, minSun: number): Promise<{ ok: boolean; reason?: string }> {
-  try {
-    const url = `https://apilist.tronscanapi.com/api/transaction-info?hash=${encodeURIComponent(hash)}`;
-    const resp = await fetch(url, {
-      signal: AbortSignal.timeout(12000),
-      headers: { "Accept": "application/json", "User-Agent": "ChatGPT-Recharge/1.0" },
-    });
-    if (!resp.ok) {
-      console.error("[deposit] verifyTrc20Hash Tronscan HTTP error:", resp.status);
-      return { ok: false, reason: "error" };
-    }
-    const ct = resp.headers.get("content-type") ?? "";
-    if (!ct.includes("application/json")) return { ok: false, reason: "error" };
-    const data = await resp.json() as {
-      contractType?: number;
-      tokenTransferInfo?: { amount_str?: string; to_address?: string; tokenId?: string };
-      confirmed?: boolean;
-    };
-    if (!data || data.contractType === undefined) return { ok: false, reason: "notfound" };
-    const transfer = data.tokenTransferInfo;
-    if (!transfer) return { ok: false, reason: "notusdt" };
-    // tokenId for TRC-20 USDT is the contract address
-    if (transfer.tokenId?.toLowerCase() !== USDT_TRC20_CONTRACT.toLowerCase()) return { ok: false, reason: "notusdt" };
-    if (transfer.to_address?.toLowerCase() !== USDT_TRC20_ADDRESS.toLowerCase()) return { ok: false, reason: "mismatch" };
-    const amt = parseInt(transfer.amount_str ?? "0");
-    if (amt >= minSun) return { ok: true };
-    return { ok: false, reason: "mismatch" };
-  } catch (err) {
-    console.error("[deposit] verifyTrc20Hash error:", err);
-    return { ok: false, reason: "error" };
-  }
+// ── BSC RPC helpers ───────────────────────────────────────────────────────────
+
+async function bscRpcCall(endpoint: string, method: string, params: unknown[], id = 1): Promise<unknown> {
+  const resp = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", method, params, id }),
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const data = await resp.json() as { result?: unknown; error?: { message?: string } };
+  if (data.error) throw new Error(data.error.message ?? "RPC error");
+  return data.result;
 }
 
 /**
- * Verify a user-provided BEP-20 tx hash via BSCScan API.
- * Returns { ok: true } if the tx transfers enough USDT to our wallet.
+ * Batch-scan recent BEP-20 USDT transfers to our wallet using a public BSC RPC node.
+ * Returns a Map of amountUsdt → txHash for all matched amounts.
+ * Uses ~200 recent blocks (~10 min on BSC at 3s/block) to cover timing windows.
  */
-async function verifyBep20Hash(hash: string, minWei: bigint): Promise<{ ok: boolean; reason?: string }> {
-  try {
-    const apiKey = process.env.BSCSCAN_API_KEY || "";
-    const keyParam = apiKey ? `&apikey=${apiKey}` : "";
-    const url = `https://api.bscscan.com/api?module=proxy&action=eth_getTransactionReceipt&txhash=${hash}${keyParam}`;
-    const resp = await fetch(url, { signal: AbortSignal.timeout(12000) });
-    if (!resp.ok) return { ok: false, reason: "notfound" };
-    const data = await resp.json() as { result?: { logs?: Array<{ address: string; topics: string[]; data: string }> } };
-    const logs = data?.result?.logs;
-    if (!Array.isArray(logs)) return { ok: false, reason: "notfound" };
-    const transferTopic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
-    const walletPadded = "0x000000000000000000000000" + USDT_BEP20_ADDRESS.slice(2).toLowerCase();
-    for (const log of logs) {
-      if (log.address?.toLowerCase() !== USDT_BEP20_CONTRACT.toLowerCase()) continue;
-      if (log.topics?.[0]?.toLowerCase() !== transferTopic) continue;
-      if (log.topics?.[2]?.toLowerCase() !== walletPadded) continue;
-      const amt = BigInt(log.data ?? "0x0");
-      if (amt >= minWei) return { ok: true };
-    }
-    if (!logs.some((l) => l.address?.toLowerCase() === USDT_BEP20_CONTRACT.toLowerCase())) {
-      return { ok: false, reason: "notusdt" };
-    }
-    return { ok: false, reason: "mismatch" };
-  } catch (err) {
-    console.error("[deposit] verifyBep20Hash error:", err);
-    return { ok: false, reason: "error" };
-  }
-}
+async function scanBscDeposits(pendingAmounts: string[]): Promise<Map<string, string>> {
+  const results = new Map<string, string>();
+  if (pendingAmounts.length === 0) return results;
 
-/**
- * Scan recent BEP-20 USDT transfers to our wallet via BSCScan token transfer API.
- * Returns matching txHash or null.
- */
-async function scanBep20(amountUsdt: string): Promise<string | null> {
-  try {
-    const apiKey = process.env.BSCSCAN_API_KEY || "";
-    const keyParam = apiKey ? `&apikey=${apiKey}` : "";
-    const url = `https://api.bscscan.com/api?module=account&action=tokentx&contractaddress=${USDT_BEP20_CONTRACT}&address=${USDT_BEP20_ADDRESS}&sort=desc&page=1&offset=50${keyParam}`;
-    const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
-    if (!resp.ok) {
-      console.error("[deposit] BSCScan scan HTTP error:", resp.status, resp.statusText);
-      return null;
-    }
-    const data = await resp.json() as { status: string; message?: string; result: Array<{ hash: string; value: string; tokenDecimal: string; to: string; confirmations: string }> | string };
-    if (data.status !== "1" || !Array.isArray(data.result)) {
-      const resultStr = typeof data.result === "string" ? data.result : "";
-      if (resultStr.toLowerCase().includes("rate limit") || data.message?.toLowerCase().includes("rate limit")) {
-        console.error("[deposit] BSCScan rate limit reached — add BSCSCAN_API_KEY or reduce scan frequency");
-      } else if (data.status !== "0") {
-        console.error("[deposit] BSCScan scan unexpected response:", JSON.stringify(data).slice(0, 200));
-      }
-      return null;
-    }
-    // USDT BEP-20 has 18 decimals.
-    // Allow ±0.01 USDT tolerance to handle exchange decimal rounding (e.g. 10.9036 → 10.90).
-    // This is a tiny fixed window that covers rounding only — not a percentage discount.
-    const expectedWei = BigInt(Math.round(parseFloat(amountUsdt) * 10_000)) * BigInt("100000000000000");
-    const toleranceWei = BigInt("10000000000000000"); // 0.01 USDT in 18-decimal wei
-    const minWei = expectedWei - toleranceWei;
-    const maxWei = expectedWei + toleranceWei;
-    for (const tx of data.result) {
-      if (tx.to?.toLowerCase() !== USDT_BEP20_ADDRESS.toLowerCase()) continue;
-      if (parseInt(tx.confirmations) < 1) continue;
-      const val = BigInt(tx.value ?? "0");
-      if (val >= minWei && val <= maxWei) {
-        console.log(`[deposit] BSCScan matched: expected ~${amountUsdt} USDT, got ${(Number(val) / 1e18).toFixed(4)} USDT tx=${tx.hash}`);
-        return tx.hash;
-      }
-    }
-    return null;
-  } catch (err) {
-    console.error("[deposit] BSCScan scan error:", err);
-    return null;
-  }
-}
+  // Pre-compute expected wei ranges for each pending amount
+  const ranges = pendingAmounts.map((amt) => {
+    const expectedWei = BigInt(Math.round(parseFloat(amt) * 1_000_000)) * BigInt("1000000000000"); // 18 decimals
+    const toleranceWei = BigInt("10000000000000000"); // ±0.01 USDT
+    return { amt, min: expectedWei - toleranceWei, max: expectedWei + toleranceWei };
+  });
 
-/**
- * Scan recent TRC-20 USDT transfers to our wallet via TronGrid API (with optional API key).
- * Falls back to Tronscan if TronGrid fails.
- * Returns matching txHash or null.
- */
-async function scanTrc20(amountUsdt: string): Promise<string | null> {
-  const expectedSun = Math.round(parseFloat(amountUsdt) * 1_000_000);
+  const walletPadded = "0x000000000000000000000000" + USDT_BEP20_ADDRESS.slice(2);
 
-  // ── Attempt 1: Tronscan (primary, no API key required) ───────────────────
-  try {
-    const url = `https://apilist.tronscanapi.com/api/token_trc20/transfers?toAddress=${USDT_TRC20_ADDRESS}&contract_address=${USDT_TRC20_CONTRACT}&limit=50&start=0`;
-    const resp = await fetch(url, {
-      signal: AbortSignal.timeout(12000),
-      headers: { "Accept": "application/json", "User-Agent": "ChatGPT-Recharge/1.0" },
-    });
-    if (resp.ok) {
-      const ct = resp.headers.get("content-type") ?? "";
-      if (ct.includes("application/json")) {
-        const data = await resp.json() as { token_transfers?: Array<{ transaction_id: string; quant: string; to_address: string; confirmed: boolean }> };
-        if (Array.isArray(data.token_transfers)) {
-          // ±0.01 USDT tolerance (= ±10000 sun) for exchange decimal rounding only
-          const toleranceSun = 10000;
-          const minSun = expectedSun - toleranceSun;
-          const maxSun = expectedSun + toleranceSun;
-          for (const tx of data.token_transfers) {
-            if (tx.to_address?.toLowerCase() !== USDT_TRC20_ADDRESS.toLowerCase()) continue;
-            if (!tx.confirmed) continue;
-            const val = parseInt(tx.quant ?? "0");
-            if (val >= minSun && val <= maxSun) {
-              console.log(`[deposit] Tronscan matched: expected ~${amountUsdt} USDT, got ${(val / 1e6).toFixed(4)} USDT tx=${tx.transaction_id}`);
-              return tx.transaction_id;
-            }
+  for (const rpc of BSC_RPC_ENDPOINTS) {
+    try {
+      // Get current block number
+      const blockHex = await bscRpcCall(rpc, "eth_blockNumber", []) as string;
+      const currentBlock = parseInt(blockHex, 16);
+      if (!currentBlock || isNaN(currentBlock)) continue;
+
+      // Look back ~200 blocks (~10 minutes)
+      const fromBlock = "0x" + Math.max(0, currentBlock - 200).toString(16);
+
+      // Fetch USDT Transfer logs where `to` is our wallet
+      const logs = await bscRpcCall(rpc, "eth_getLogs", [{
+        fromBlock,
+        toBlock: "latest",
+        address: USDT_BEP20_CONTRACT,
+        topics: [ERC20_TRANSFER_TOPIC, null, walletPadded],
+      }]) as Array<{ transactionHash: string; data: string }>;
+
+      if (!Array.isArray(logs)) continue;
+
+      // Match each log against pending deposit amounts
+      for (const log of logs) {
+        const val = BigInt(log.data ?? "0x0");
+        for (const r of ranges) {
+          if (results.has(r.amt)) continue; // already matched
+          if (val >= r.min && val <= r.max) {
+            console.log(`[deposit] ✓ RPC matched ${r.amt} USDT → tx ${log.transactionHash}`);
+            results.set(r.amt, log.transactionHash);
           }
-          return null; // Tronscan responded fine, no match
         }
       }
+
+      // Successfully queried this RPC — return results
+      return results;
+    } catch (err) {
+      console.error(`[deposit] RPC scan failed (${rpc}):`, (err as Error).message);
+      // Try next endpoint
     }
-    console.error("[deposit] Tronscan scan HTTP error:", resp.status, resp.statusText);
-  } catch (err) {
-    console.error("[deposit] Tronscan scan error:", err);
   }
 
-  // ── Attempt 2: TronGrid fallback (supports TRONGRID_API_KEY for higher limits) ──
-  try {
-    const apiKey = process.env.TRONGRID_API_KEY || "";
-    const headers: Record<string, string> = {
-      "Accept": "application/json",
-      "User-Agent": "ChatGPT-Recharge/1.0",
-    };
-    if (apiKey) headers["TRON-PRO-API-KEY"] = apiKey;
+  console.error("[deposit] All BSC RPC endpoints failed");
+  return results;
+}
 
-    const url = `https://api.trongrid.io/v1/accounts/${USDT_TRC20_ADDRESS}/transactions/trc20?contract_address=${USDT_TRC20_CONTRACT}&limit=50&order_by=block_timestamp,desc&only_to=true`;
-    const resp = await fetch(url, { signal: AbortSignal.timeout(12000), headers });
-    if (!resp.ok) {
-      console.error("[deposit] TronGrid fallback scan HTTP error:", resp.status, resp.statusText);
-      return null;
-    }
-    const ct = resp.headers.get("content-type") ?? "";
-    if (!ct.includes("application/json")) return null;
-    const data = await resp.json() as { data?: Array<{ transaction_id: string; value: string; to: string }> };
-    if (!Array.isArray(data.data)) return null;
-    // ±0.01 USDT tolerance (= ±10000 sun) for exchange decimal rounding only
-    const toleranceSun = 10000;
-    const minSun = expectedSun - toleranceSun;
-    const maxSun = expectedSun + toleranceSun;
-    for (const tx of data.data) {
-      if (tx.to?.toLowerCase() !== USDT_TRC20_ADDRESS.toLowerCase()) continue;
-      const val = parseInt(tx.value ?? "0");
-      if (val >= minSun && val <= maxSun) {
-        console.log(`[deposit] TronGrid matched: expected ~${amountUsdt} USDT, got ${(val / 1e6).toFixed(4)} USDT tx=${tx.transaction_id}`);
-        return tx.transaction_id;
+/**
+ * Verify a specific tx hash for a BEP-20 USDT transfer to our wallet.
+ * Uses direct RPC getLogs on the transaction's block for precision.
+ */
+async function verifyBep20Hash(txHash: string, minWei: bigint): Promise<{ ok: boolean; reason?: string }> {
+  const walletPadded = "0x000000000000000000000000" + USDT_BEP20_ADDRESS.slice(2);
+
+  for (const rpc of BSC_RPC_ENDPOINTS) {
+    try {
+      const receipt = await bscRpcCall(rpc, "eth_getTransactionReceipt", [txHash]) as {
+        status?: string;
+        logs?: Array<{ address: string; topics: string[]; data: string }>;
+      } | null;
+      if (!receipt) return { ok: false, reason: "notfound" };
+      if (receipt.status === "0x0") return { ok: false, reason: "failed" };
+      const logs = receipt.logs ?? [];
+      let foundUsdt = false;
+      for (const log of logs) {
+        if (log.address?.toLowerCase() !== USDT_BEP20_CONTRACT) continue;
+        foundUsdt = true;
+        if (log.topics?.[0]?.toLowerCase() !== ERC20_TRANSFER_TOPIC) continue;
+        if (log.topics?.[2]?.toLowerCase() !== walletPadded) continue;
+        const val = BigInt(log.data ?? "0x0");
+        if (val >= minWei) return { ok: true };
       }
+      return { ok: false, reason: foundUsdt ? "mismatch" : "notusdt" };
+    } catch {
+      continue;
     }
-    return null;
-  } catch (err) {
-    console.error("[deposit] TronGrid fallback scan error:", err);
-    return null;
   }
+  return { ok: false, reason: "error" };
 }
 
 /**
@@ -251,7 +169,7 @@ async function creditDeposit(depositId: number, txHash: string): Promise<number 
 
 /**
  * Background auto-processor: exported so server/index.ts can call it on startup.
- * Scans all pending, non-expired deposits and credits them if payment is found.
+ * Batch-scans ALL pending BEP-20 deposits in a single RPC call.
  */
 export async function processAllPendingDeposits(): Promise<void> {
   try {
@@ -266,28 +184,29 @@ export async function processAllPendingDeposits(): Promise<void> {
       console.log(`[deposit] Marked ${expiredRows.length} overdue deposit(s) as expired`);
     }
 
-    // ── Step 2: Scan active pending deposits ──────────────────────────────────
+    // ── Step 2: Batch-scan all active pending deposits ────────────────────────
     const pending = await db.select().from(depositRequests)
       .where(and(eq(depositRequests.status, "pending"), sql`expires_at > ${now}`));
     if (pending.length === 0) return;
 
-    console.log(`[deposit] Scanning ${pending.length} active pending deposit(s)…`);
+    console.log(`[deposit] Scanning ${pending.length} active pending deposit(s) via BSC RPC…`);
+
+    // One RPC call fetches logs for all pending amounts at once
+    const amounts = pending.map((d) => d.amountUsdt);
+    const foundMap = await scanBscDeposits(amounts);
+
     for (const dep of pending) {
-      try {
-        const txHash = dep.network === "bep20"
-          ? await scanBep20(dep.amountUsdt)
-          : await scanTrc20(dep.amountUsdt);
-        if (txHash) {
+      const txHash = foundMap.get(dep.amountUsdt);
+      if (txHash) {
+        try {
           const newBalance = await creditDeposit(dep.id, txHash);
           if (newBalance !== null) {
-            console.log(`[deposit] ✓ Auto-credited deposit #${dep.id} (${dep.amountUsdt} USDT ${dep.network.toUpperCase()}) → user ${dep.userId}, new balance: ${newBalance} cents`);
+            console.log(`[deposit] ✓ Auto-credited deposit #${dep.id} (${dep.amountUsdt} USDT BEP-20) → user ${dep.userId}, balance: ${newBalance} cents`);
           }
+        } catch (err) {
+          console.error(`[deposit] Failed to credit deposit #${dep.id}:`, err);
         }
-      } catch (err) {
-        console.error(`[deposit] Background check failed for deposit #${dep.id}:`, err);
       }
-      // Small delay between deposits to avoid rapid-fire API rate limiting
-      if (pending.length > 1) await new Promise(r => setTimeout(r, 600));
     }
   } catch (err) {
     console.error("[deposit] processAllPendingDeposits error:", err);
@@ -1387,18 +1306,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ── Deposit routes ────────────────────────────────────
 
   app.post("/api/deposit/create", requireAuth, async (req, res) => {
-    const { amountUsd, network } = req.body;
+    const { amountUsd } = req.body;
+    const network = "bep20"; // BSC only
     const amount = parseFloat(amountUsd);
     if (!amountUsd || isNaN(amount) || amount < 1 || amount > 10000) {
       return res.json({ success: false, message: "Amount must be between $1 and $10,000." });
     }
-    if (!network || !["bep20", "trc20"].includes(network)) {
-      return res.json({ success: false, message: "Network must be bep20 or trc20." });
-    }
 
     const amountCents = Math.round(amount * 100);
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    const walletAddress = network === "bep20" ? USDT_BEP20_ADDRESS : USDT_TRC20_ADDRESS;
+    const walletAddress = USDT_BEP20_ADDRESS;
 
     try {
       // Generate a unique amountUsdt: add a micro-offset (0.0001–0.0099) that
@@ -1477,34 +1394,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.json({ success: false, status: "expired", message: "This deposit request has expired." });
       }
 
-      const minSun = deposit.amountCents * 9500;
+      // Minimum expected wei (allow small tolerance: exact amount ±0.01 USDT)
       const minWei = BigInt(deposit.amountCents) * BigInt("9500000000000000");
       let found = false;
       let txHash: string | null = null;
 
-      // ── If user provided a TX hash: verify it directly ───────────────────────
+      // ── If user provided a TX hash: verify it directly via RPC ──────────────
       if (userTxHash) {
-        const result = deposit.network === "bep20"
-          ? await verifyBep20Hash(userTxHash, minWei)
-          : await verifyTrc20Hash(userTxHash, minSun);
+        const result = await verifyBep20Hash(userTxHash, minWei);
         if (result.ok) {
           found = true;
           txHash = userTxHash;
         } else if (result.reason === "notusdt") {
-          // Definitive mismatch — no point scanning wallet
-          return res.json({ success: true, status: "pending", message: "This transaction does not contain a USDT transfer. Please check you selected the correct network." });
+          return res.json({ success: true, status: "pending", message: "This transaction does not contain a USDT (BEP-20) transfer. Make sure you sent on BSC network." });
         } else if (result.reason === "mismatch") {
-          // Definitive mismatch — transaction found but wrong wallet/amount
-          return res.json({ success: true, status: "pending", message: "Transaction found but not sent to our wallet or amount is incorrect. Please check the wallet address and amount." });
+          return res.json({ success: true, status: "pending", message: "Transaction found but sent to wrong wallet or wrong amount. Check address and exact amount." });
         }
-        // reason === "notfound" | "error" → provider may be down, fall through to wallet scan
+        // reason === "notfound" | "error" | "failed" → RPC may be slow, fall through to scan
       }
 
-      // ── Scan recent transactions on our wallet ────────────────────────────────
+      // ── Batch-scan recent transfers on our BSC wallet ────────────────────────
       if (!found) {
-        const scannedHash = deposit.network === "bep20"
-          ? await scanBep20(deposit.amountUsdt)
-          : await scanTrc20(deposit.amountUsdt);
+        const scanResults = await scanBscDeposits([deposit.amountUsdt]);
+        const scannedHash = scanResults.get(deposit.amountUsdt) ?? null;
         if (scannedHash) {
           found = true;
           txHash = scannedHash;

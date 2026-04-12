@@ -96,7 +96,7 @@ function TopUpDialog({ open, onClose }: { open: boolean; onClose: () => void }) 
   const { toast } = useToast();
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [amountUsd, setAmountUsd] = useState("");
-  const [network, setNetwork] = useState<"trc20" | "bep20">("trc20");
+  const network = "bep20" as const;
   const [deposit, setDeposit] = useState<DepositInfo | null>(null);
   const [checkResult, setCheckResult] = useState<{ status: string; message?: string; balanceCents?: number } | null>(null);
   const [txHashInput, setTxHashInput] = useState("");
@@ -119,7 +119,6 @@ function TopUpDialog({ open, onClose }: { open: boolean; onClose: () => void }) 
     stopScanning();
     setStep(1);
     setAmountUsd("");
-    setNetwork("trc20");
     setDeposit(null);
     setCheckResult(null);
     setTxHashInput("");
@@ -205,7 +204,7 @@ function TopUpDialog({ open, onClose }: { open: boolean; onClose: () => void }) 
     return () => { stopScanning(); };
   }, []);
 
-  const networkLabel = network === "trc20" ? "TRC-20 (TRON)" : "BEP-20 (BSC)";
+  const networkLabel = "BEP-20 (BSC)";
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && handleClose()}>
@@ -239,24 +238,15 @@ function TopUpDialog({ open, onClose }: { open: boolean; onClose: () => void }) 
             </div>
             <div>
               <label className="text-sm font-medium text-foreground block mb-1.5">Network</label>
-              <div className="grid grid-cols-2 gap-2">
-                {(["trc20", "bep20"] as const).map((n) => (
-                  <button
-                    key={n}
-                    onClick={() => setNetwork(n)}
-                    className={`px-3 py-2.5 rounded-lg border text-sm font-medium transition-all text-left ${
-                      network === n
-                        ? "border-primary bg-primary/10 text-primary"
-                        : "border-border bg-background text-muted-foreground hover:text-foreground"
-                    }`}
-                    data-testid={`button-network-${n}`}
-                  >
-                    <div className="font-semibold">{n === "trc20" ? "TRC-20" : "BEP-20"}</div>
-                    <div className="text-xs opacity-70">{n === "trc20" ? "TRON" : "BSC"}</div>
-                  </button>
-                ))}
+              <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-primary bg-primary/5">
+                <div className="w-8 h-8 rounded-full bg-[#F0B90B]/20 flex items-center justify-center shrink-0">
+                  <span className="text-sm font-black text-[#F0B90B]">B</span>
+                </div>
+                <div>
+                  <div className="text-sm font-semibold text-foreground">BEP-20 (BSC)</div>
+                  <div className="text-xs text-muted-foreground">Binance Smart Chain · USDT</div>
+                </div>
               </div>
-              <p className="text-xs text-muted-foreground mt-1.5">TRC-20 has lower withdrawal fees on Binance.</p>
             </div>
             <Button
               className="w-full"
@@ -333,7 +323,7 @@ function TopUpDialog({ open, onClose }: { open: boolean; onClose: () => void }) 
               <Input
                 value={txHashInput}
                 onChange={(e) => setTxHashInput(e.target.value)}
-                placeholder={deposit?.network === "trc20" ? "e.g. abc123def456..." : "e.g. 0xabc123..."}
+                placeholder="e.g. 0xabc123def456... (BSC transaction hash)"
                 className="font-mono text-xs"
                 disabled={scanning}
                 data-testid="input-tx-hash"
