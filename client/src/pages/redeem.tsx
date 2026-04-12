@@ -27,6 +27,13 @@ interface ActivationResult {
   activatedAt?: string;
 }
 
+interface CdkInfo {
+  type: string;
+  apiSource?: "ovh" | "suppy";
+  keyType?: "personal" | "team";
+  service?: "chatgpt" | "claude";
+}
+
 interface NitroSession {
   email: string;
   planType: string;
@@ -114,8 +121,13 @@ export default function RedeemPage() {
   // ── Shared ────────────────────────────────────────────────────────────────
   const [step, setStep] = useState<Step>(1);
   const [cdkKey, setCdkKey] = useState("");
-  const [cdkInfo, setCdkInfo] = useState<{ type: string } | null>(null);
+  const [cdkInfo, setCdkInfo] = useState<CdkInfo | null>(null);
   const [usedKeyInfo, setUsedKeyInfo] = useState<{ activatedFor: string | null; activatedAt: string | null } | null>(null);
+
+  // ── Team key (Suppy) ──────────────────────────────────────────────────────
+  const [teamEmail, setTeamEmail] = useState("");
+  const [teamEmailError, setTeamEmailError] = useState<string | null>(null);
+  const [teamResult, setTeamResult] = useState<ActivationResult | null>(null);
 
   // ── Standard mode ─────────────────────────────────────────────────────────
   const [sessionData, setSessionData] = useState("");
@@ -165,6 +177,10 @@ export default function RedeemPage() {
     setSessionValidated(false);
     setSessionError(null);
     setActivationResult(null);
+    // team
+    setTeamEmail("");
+    setTeamEmailError(null);
+    setTeamResult(null);
     // nitro
     setNitroSession("");
     setNitroParsed(null);
@@ -190,7 +206,7 @@ export default function RedeemPage() {
     onSuccess: (data) => {
       if (data.valid) {
         setUsedKeyInfo(null);
-        setCdkInfo({ type: data.type });
+        setCdkInfo({ type: data.type, apiSource: data.apiSource, keyType: data.keyType, service: data.service });
         setStep(2);
       } else if (data.status === "used") {
         setUsedKeyInfo({ activatedFor: data.activatedFor ?? null, activatedAt: data.activatedAt ?? null });
@@ -221,7 +237,7 @@ export default function RedeemPage() {
   // ── Standard: activate ────────────────────────────────────────────────────
   const activate = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/activate", { cdkKey, sessionData });
+      const res = await apiRequest("POST", "/api/activate", { cdkKey, sessionData, apiSource: cdkInfo?.apiSource });
       return res.json();
     },
     onSuccess: (data) => {
@@ -233,6 +249,23 @@ export default function RedeemPage() {
       }
     },
     onError: () => toast({ title: "Activation error", description: "Could not reach the activation service. Please try again.", variant: "destructive" }),
+  });
+
+  // ── Team key activation (Suppy) ───────────────────────────────────────────
+  const activateTeam = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/activate-team", { cdkKey, email: teamEmail });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      if (data.success) {
+        setTeamResult({ email: data.email });
+        setStep(3);
+      } else {
+        setTeamEmailError(data.message || "Activation failed. Please try again.");
+      }
+    },
+    onError: () => setTeamEmailError("Could not reach the activation service. Please try again."),
   });
 
   // ── Nitro: parse session client-side ─────────────────────────────────────
@@ -316,6 +349,33 @@ export default function RedeemPage() {
 
   return (
     <PageLayout>
+      {/* ── Success Modal (Team Key) ── */}
+      <Dialog open={!!teamResult && step === 3} onOpenChange={(open) => { if (!open) resetAll(); }}>
+        <DialogContentRaw className="sm:max-w-xs mx-4 bg-[#111827] border-0 p-0 overflow-hidden">
+          <div className="flex flex-col items-center gap-5 p-8 text-center">
+            <div className="w-20 h-20 rounded-full bg-[#22c55e] flex items-center justify-center shadow-lg shadow-green-500/30">
+              <CheckCircle className="w-10 h-10 text-white" strokeWidth={2.5} />
+            </div>
+            <div>
+              <h2 className="text-xl font-bold text-white">Invitation Sent!</h2>
+              <p className="text-gray-400 text-sm mt-1">Check your email for the team subscription invitation.</p>
+            </div>
+            {teamResult?.email && (
+              <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-[#14532d]/60 border border-[#22c55e]/40 text-[#4ade80] text-sm font-medium">
+                <Mail className="w-4 h-4 shrink-0" />
+                <span className="truncate max-w-[220px]">{teamResult.email}</span>
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-3 w-full pt-1">
+              <button onClick={resetAll} className="px-4 py-2.5 rounded-lg bg-[#1f2937] text-white text-sm font-medium hover:bg-[#374151] transition-colors">Close</button>
+              <button onClick={resetAll} className="px-4 py-2.5 rounded-lg bg-[#22c55e] text-white text-sm font-medium hover:bg-[#16a34a] transition-colors flex items-center justify-center gap-2">
+                <RotateCcw className="w-4 h-4" />One More
+              </button>
+            </div>
+          </div>
+        </DialogContentRaw>
+      </Dialog>
+
       {/* ── Success Modal (Standard) ── */}
       <Dialog open={!!activationResult} onOpenChange={(open) => { if (!open) resetAll(); }}>
         <DialogContentRaw className="sm:max-w-xs mx-4 bg-[#111827] border-0 p-0 overflow-hidden">
@@ -457,14 +517,60 @@ export default function RedeemPage() {
           </div>
 
           {/* ═══════════════════════════════════════════════════════
-               STANDARD MODE — Step 2
+               STANDARD MODE — Step 2 (team key via email)
           ═══════════════════════════════════════════════════════ */}
-          {mode === "standard" && (
+          {mode === "standard" && cdkInfo?.keyType === "team" && (
+            <>
+              <div className={`transition-opacity duration-300 ${step >= 2 ? "opacity-100" : "opacity-40 pointer-events-none select-none"}`}>
+                <h2 className="text-base font-semibold text-foreground mb-2">Enter your email</h2>
+                <p className="text-sm text-muted-foreground mb-3">
+                  This is a team subscription key. Enter the email address for the ChatGPT account you want to add to the team.
+                </p>
+                <Input
+                  type="email"
+                  placeholder="your@email.com"
+                  value={teamEmail}
+                  onChange={(e) => { setTeamEmail(e.target.value); setTeamEmailError(null); }}
+                  disabled={step < 2 || activateTeam.isPending}
+                  className={teamEmailError ? "border-destructive" : ""}
+                  data-testid="input-team-email"
+                />
+                {teamEmailError && (
+                  <div className="flex items-start gap-2 mt-2 text-xs text-destructive">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    <span>{teamEmailError}</span>
+                  </div>
+                )}
+              </div>
+              <Button
+                className="w-full gap-2" size="lg"
+                onClick={() => activateTeam.mutate()}
+                disabled={!teamEmail.trim() || step !== 2 || activateTeam.isPending}
+                data-testid="button-activate-team"
+              >
+                {activateTeam.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                {activateTeam.isPending ? "Activating..." : "Activate"}
+              </Button>
+              <div className="flex items-start gap-2 text-xs text-muted-foreground">
+                <AlertTriangle className="w-4 h-4 text-yellow-600 dark:text-yellow-400 shrink-0 mt-0.5" />
+                <span>You'll receive a team invitation to your email. Check your inbox (and spam) after activation.</span>
+              </div>
+            </>
+          )}
+
+          {/* ═══════════════════════════════════════════════════════
+               STANDARD MODE — Step 2 (personal / session)
+          ═══════════════════════════════════════════════════════ */}
+          {mode === "standard" && cdkInfo?.keyType !== "team" && (
             <>
               <div className={`transition-opacity duration-300 ${step >= 2 ? "opacity-100" : "opacity-40 pointer-events-none select-none"}`}>
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
-                  <h2 className="text-base font-semibold text-foreground">Get AuthSession data</h2>
-                  {step >= 2 && (
+                  {cdkInfo?.service === "claude" ? (
+                    <h2 className="text-base font-semibold text-foreground">Get your Claude session key</h2>
+                  ) : (
+                    <h2 className="text-base font-semibold text-foreground">Get AuthSession data</h2>
+                  )}
+                  {step >= 2 && cdkInfo?.service !== "claude" && (
                     <div className="flex items-center gap-3 flex-wrap">
                       <a href="https://chat.openai.com" target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-xs text-primary font-medium" data-testid="link-open-chatgpt">
                         <ExternalLink className="w-3 h-3" />Open ChatGPT
@@ -475,11 +581,19 @@ export default function RedeemPage() {
                     </div>
                   )}
                 </div>
-                <p className="text-sm text-muted-foreground mb-3">
-                  Open the AuthSession page, copy the full JSON content, then paste it here and click validate.
-                </p>
+                {cdkInfo?.service === "claude" ? (
+                  <p className="text-sm text-muted-foreground mb-3">
+                    Open claude.ai, use Cookie Editor to find the <code className="font-mono bg-muted px-1 rounded text-xs">sessionKey</code> cookie, then paste its value (starts with <code className="font-mono bg-muted px-1 rounded text-xs">sk-ant-sid01-</code>) below.
+                  </p>
+                ) : (
+                  <p className="text-sm text-muted-foreground mb-3">
+                    Open the AuthSession page, copy the full JSON content, then paste it here and click validate.
+                  </p>
+                )}
                 <Textarea
-                  placeholder='Paste the full JSON from AuthSession page (e.g. {"accessToken":"...","user":{...}})'
+                  placeholder={cdkInfo?.service === "claude"
+                    ? "sk-ant-sid01-..."
+                    : 'Paste the full JSON from AuthSession page (e.g. {"accessToken":"...","user":{...}})'}
                   value={sessionData}
                   onChange={(e) => { setSessionData(e.target.value); setSessionValidated(false); setSessionError(null); }}
                   disabled={step < 2 || validateSession.isPending || activate.isPending}
@@ -498,24 +612,26 @@ export default function RedeemPage() {
                       <Check className="w-3.5 h-3.5" />Session validated
                     </div>
                   )}
-                  <div className="ml-auto">
-                    <Button
-                      variant="secondary" size="sm"
-                      onClick={() => validateSession.mutate(sessionData.trim())}
-                      disabled={!sessionData.trim() || step < 2 || sessionValidated || validateSession.isPending}
-                      data-testid="button-validate-session"
-                    >
-                      {validateSession.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : null}
-                      {validateSession.isPending ? "Verifying..." : "Validate"}
-                    </Button>
-                  </div>
+                  {cdkInfo?.service !== "claude" && (
+                    <div className="ml-auto">
+                      <Button
+                        variant="secondary" size="sm"
+                        onClick={() => validateSession.mutate(sessionData.trim())}
+                        disabled={!sessionData.trim() || step < 2 || sessionValidated || validateSession.isPending}
+                        data-testid="button-validate-session"
+                      >
+                        {validateSession.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : null}
+                        {validateSession.isPending ? "Verifying..." : "Validate"}
+                      </Button>
+                    </div>
+                  )}
                 </div>
               </div>
 
               <Button
                 className="w-full gap-2" size="lg"
                 onClick={() => activate.mutate()}
-                disabled={!sessionValidated || step !== 2 || activate.isPending}
+                disabled={(!sessionValidated && cdkInfo?.service !== "claude") || !sessionData.trim() || step !== 2 || activate.isPending}
                 data-testid="button-activate"
               >
                 {activate.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
@@ -524,7 +640,10 @@ export default function RedeemPage() {
 
               <div className="flex items-start gap-2 text-xs text-muted-foreground">
                 <AlertTriangle className="w-4 h-4 text-yellow-600 dark:text-yellow-400 shrink-0 mt-0.5" />
-                <span>After activation, try refreshing the ChatGPT page multiple times. The page will refresh itself to update the subscription status.</span>
+                {cdkInfo?.service === "claude"
+                  ? <span>After activation, try refreshing the Claude page. The subscription status may take a moment to update.</span>
+                  : <span>After activation, try refreshing the ChatGPT page multiple times. The page will refresh itself to update the subscription status.</span>
+                }
               </div>
             </>
           )}

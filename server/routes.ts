@@ -297,6 +297,67 @@ export async function processAllPendingDeposits(): Promise<void> {
 const CDK_API_KEY = process.env.CDK_API_KEY || "";
 const API_BASE = "https://keys.ovh/api/v1";
 
+// ── Suppy.Redeem API integration ──────────────────────────────────────────────
+const SUPPY_API_BASE = "https://redeem.suppy.org/api";
+
+async function suppyFetch(method: string, path: string, body?: object): Promise<{ ok: boolean; status: number; data?: any; error?: string }> {
+  try {
+    const res = await fetch(`${SUPPY_API_BASE}${path}`, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(15000),
+    });
+    const text = await res.text();
+    let data: any;
+    try { data = JSON.parse(text); } catch { data = text; }
+    return { ok: res.ok, status: res.status, data };
+  } catch (err) {
+    return { ok: false, status: 0, error: String(err) };
+  }
+}
+
+async function suppyCheckKey(code: string): Promise<{
+  found: boolean; status?: string; keyType?: string; service?: string;
+  plan?: string; term?: string; activatedEmail?: string | null; activatedAt?: number | null;
+} | null> {
+  const res = await suppyFetch("GET", `/chatgpt/keys/${encodeURIComponent(code.trim())}`);
+  if (res.status === 404) return { found: false };
+  if (!res.ok || !res.data || typeof res.data !== "object") return null;
+  const d = res.data;
+  return {
+    found: true,
+    status: d.status,
+    keyType: d.key_type,
+    service: d.service,
+    plan: d.plan,
+    term: d.term,
+    activatedEmail: d.activated_email ?? null,
+    activatedAt: d.activated_at ?? null,
+  };
+}
+
+async function suppyPollActivation(code: string, maxAttempts = 10, intervalMs = 3000): Promise<{
+  success: boolean; email?: string; activationType?: string; message?: string;
+}> {
+  for (let i = 0; i < maxAttempts; i++) {
+    if (i > 0) await new Promise(r => setTimeout(r, intervalMs));
+    try {
+      const res = await suppyFetch("GET", `/chatgpt/keys/activation-status/${encodeURIComponent(code)}`);
+      if (!res.ok || !res.data || typeof res.data !== "object") continue;
+      const d = res.data;
+      if (d.status === "subscription_sent") {
+        return { success: true, email: d.key?.activated_email ?? undefined, activationType: d.activation_type };
+      }
+      if (d.status === "error") {
+        return { success: false, message: d.message || "Activation failed on provider side." };
+      }
+      // "started" | "account_found" — keep polling
+    } catch { /* swallow, retry */ }
+  }
+  return { success: false, message: "Activation is taking longer than expected. Please check your account in a few minutes." };
+}
+
 // ── WhatsApp Bot helpers ──────────────────────────────────────────────────────
 
 interface WaState {
@@ -314,14 +375,22 @@ setInterval(() => {
   }
 }, 30 * 60 * 1000);
 
-async function checkCdkKeyStatus(key: string): Promise<{ status: string; type?: string }> {
+async function checkCdkKeyStatus(key: string): Promise<{ status: string; type?: string; apiSource?: string }> {
   try {
     const data = await apiCall("GET", `/key/${encodeURIComponent(key.trim())}/status`);
-    if (!data.success) return { status: "invalid" };
-    const keyData = data.data;
-    if (keyData.status === "available") return { status: "available", type: keyData.subscription };
-    if (keyData.status === "used" || keyData.status === "activated") return { status: "used" };
-    if (keyData.status === "expired") return { status: "expired" };
+    if (data.success) {
+      const keyData = data.data;
+      if (keyData.status === "available") return { status: "available", type: keyData.subscription, apiSource: "ovh" };
+      if (keyData.status === "used" || keyData.status === "activated") return { status: "used", apiSource: "ovh" };
+      if (keyData.status === "expired") return { status: "expired", apiSource: "ovh" };
+    }
+    // Not found on keys.ovh — try Suppy
+    const suppy = await suppyCheckKey(key.trim());
+    if (suppy && suppy.found) {
+      if (suppy.status === "available") return { status: "available", type: suppy.plan ?? "CDK", apiSource: "suppy" };
+      if (suppy.status === "activated") return { status: "used", apiSource: "suppy" };
+      if (suppy.status === "reserved") return { status: "invalid", apiSource: "suppy" };
+    }
     return { status: "invalid" };
   } catch {
     return { status: "error" };
@@ -338,6 +407,7 @@ async function activateCdkViaWhatsApp(cdkKey: string, sessionData: string): Prom
     }
   } catch { /* not JSON — treat as raw token */ }
 
+  // Try keys.ovh first
   let data = await apiCall("POST", "/activate", { key: cdkKey.trim(), user_token: rawSession });
   if (!data.success && data.error === "token_invalid") {
     data = await apiCall("POST", "/activate", { key: cdkKey.trim(), user_token: accessToken });
@@ -345,6 +415,17 @@ async function activateCdkViaWhatsApp(cdkKey: string, sessionData: string): Prom
   if (data.success) {
     return { success: true, email: data.data?.email, subscription: data.data?.subscription };
   }
+
+  // keys.ovh failed — try Suppy if the key exists there
+  if (data.error === "key_not_found" || !data.success) {
+    const suppyStart = await suppyFetch("POST", "/chatgpt/keys/activate-session", { code: cdkKey.trim(), session: rawSession });
+    if (suppyStart.ok && suppyStart.data?.status === "started") {
+      const result = await suppyPollActivation(cdkKey.trim());
+      if (result.success) return { success: true, email: result.email, subscription: result.activationType };
+      return { success: false, message: result.message || "Activation failed via Suppy." };
+    }
+  }
+
   const errMap: Record<string, string> = {
     key_not_found: "Key not found or not available.",
     activation_failed: "Activation failed. Please check your session data and try again.",
@@ -990,26 +1071,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(400).json({ success: false, error: "missing_key", message: "The 'key' field is required." });
     }
     try {
+      // Try keys.ovh first
       const data = await apiCall("GET", `/key/${encodeURIComponent(key.trim())}/status`);
-      if (!data.success) {
-        const msg = data.error === "key_not_found" ? "Key not found or not available." : data.message || "Invalid key.";
-        return res.json({ success: false, error: data.error || "key_not_found", message: msg });
+      if (data.success) {
+        const keyData = data.data;
+        if (keyData.status === "available") {
+          return res.json({ success: true, status: "available", type: keyData.subscription || "Plus CDK", apiSource: "ovh" });
+        } else if (keyData.status === "used" || keyData.status === "activated") {
+          return res.json({ success: true, status: "used", message: "This key has already been activated.", activatedFor: keyData.activated_for ?? keyData.used_by ?? keyData.email ?? null, activatedAt: keyData.activated_at ?? keyData.used_at ?? null, apiSource: "ovh" });
+        } else if (keyData.status === "expired") {
+          return res.json({ success: true, status: "expired", message: "This key has expired.", apiSource: "ovh" });
+        }
       }
-      const keyData = data.data;
-      if (keyData.status === "available") {
-        return res.json({ success: true, status: "available", type: keyData.subscription || "Plus CDK" });
-      } else if (keyData.status === "used" || keyData.status === "activated") {
-        return res.json({
-          success: true,
-          status: "used",
-          message: "This key has already been activated.",
-          activatedFor: keyData.activated_for ?? keyData.used_by ?? keyData.email ?? null,
-          activatedAt: keyData.activated_at ?? keyData.used_at ?? null,
-        });
-      } else if (keyData.status === "expired") {
-        return res.json({ success: true, status: "expired", message: "This key has expired." });
+      // Try Suppy fallback
+      const suppy = await suppyCheckKey(key.trim());
+      if (suppy && suppy.found) {
+        if (suppy.status === "available") return res.json({ success: true, status: "available", type: suppy.plan ?? "CDK", keyType: suppy.keyType, service: suppy.service, apiSource: "suppy" });
+        if (suppy.status === "activated") return res.json({ success: true, status: "used", message: "This key has already been activated.", activatedFor: suppy.activatedEmail, activatedAt: suppy.activatedAt, apiSource: "suppy" });
+        if (suppy.status === "reserved") return res.json({ success: false, error: "reserved", message: "Key is currently reserved.", apiSource: "suppy" });
       }
-      return res.json({ success: false, error: "unavailable", message: "Key is not available." });
+      const msg = data.error === "key_not_found" ? "Key not found or not available." : data.message || "Invalid key.";
+      return res.json({ success: false, error: "key_not_found", message: msg });
     } catch (err) {
       console.error("API v1 check error:", err);
       return res.status(500).json({ success: false, error: "server_error", message: "Key check service unavailable. Please try again." });
@@ -1017,7 +1099,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.post("/api/v1/redeem", requireApiKey, async (req, res) => {
-    const { key: cdkKey, session } = req.body;
+    const { key: cdkKey, session, apiSource } = req.body;
     if (!cdkKey || typeof cdkKey !== "string" || cdkKey.trim().length === 0) {
       return res.status(400).json({ success: false, error: "missing_key", message: "The 'key' field is required." });
     }
@@ -1026,6 +1108,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     try {
       const rawSession = session.trim();
+
+      // Route to Suppy if specified
+      if (apiSource === "suppy") {
+        const startRes = await suppyFetch("POST", "/chatgpt/keys/activate-session", { code: cdkKey.trim(), session: rawSession });
+        if (!startRes.ok) {
+          const errText = typeof startRes.data === "string" ? startRes.data : startRes.data?.message || "Activation failed.";
+          return res.json({ success: false, error: "activation_failed", message: errText });
+        }
+        const result = await suppyPollActivation(cdkKey.trim(), 10, 3000);
+        if (result.success) return res.json({ success: true, email: result.email, subscription: result.activationType, apiSource: "suppy" });
+        return res.json({ success: false, error: "activation_failed", message: result.message || "Activation failed." });
+      }
+
+      // keys.ovh path
       let accessToken: string = rawSession;
       try {
         const parsed = JSON.parse(rawSession);
@@ -1039,14 +1135,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         data = await apiCall("POST", "/activate", { key: cdkKey.trim(), user_token: accessToken });
       }
       if (data.success) {
-        return res.json({
-          success: true,
-          email: data.data?.email,
-          product: data.data?.product,
-          subscription: data.data?.subscription,
-          activatedAt: data.data?.activated_at,
-        });
+        return res.json({ success: true, email: data.data?.email, product: data.data?.product, subscription: data.data?.subscription, activatedAt: data.data?.activated_at, apiSource: "ovh" });
       }
+
+      // keys.ovh didn't find it — try Suppy automatically
+      if (data.error === "key_not_found") {
+        const startRes = await suppyFetch("POST", "/chatgpt/keys/activate-session", { code: cdkKey.trim(), session: rawSession });
+        if (startRes.ok && startRes.data?.status === "started") {
+          const result = await suppyPollActivation(cdkKey.trim(), 10, 3000);
+          if (result.success) return res.json({ success: true, email: result.email, subscription: result.activationType, apiSource: "suppy" });
+          return res.json({ success: false, error: "activation_failed", message: result.message || "Activation failed." });
+        }
+      }
+
       const errorMessages: Record<string, string> = {
         key_not_found: "Key not found or not available.",
         activation_failed: "Activation failed. Please check your session data and try again.",
@@ -1701,28 +1802,55 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.json({ valid: false, message: "CDK key is required." });
     }
     try {
+      // ── Try keys.ovh first ─────────────────────────────────────────────────
       const data = await apiCall("GET", `/key/${encodeURIComponent(key.trim())}/status`);
-      if (!data.success) {
-        const msg = data.error === "key_not_found" ? "Key not found or not available." : data.message || "Invalid key.";
-        return res.json({ valid: false, message: msg });
+      if (data.success) {
+        const keyData = data.data;
+        if (keyData.status === "available") {
+          return res.json({ valid: true, type: keyData.subscription || "Plus CDK", status: keyData.status, apiSource: "ovh" });
+        } else if (keyData.status === "used" || keyData.status === "activated") {
+          const activatedFor = keyData.activated_for ?? keyData.used_by ?? keyData.email ?? keyData.activated_email ?? null;
+          const activatedAt = keyData.activated_at ?? keyData.used_at ?? keyData.activatedAt ?? null;
+          return res.json({ valid: false, status: "used", message: "This key has already been activated.", activatedFor, activatedAt, apiSource: "ovh" });
+        } else if (keyData.status === "expired") {
+          return res.json({ valid: false, status: "expired", message: "This key has expired.", apiSource: "ovh" });
+        }
+        return res.json({ valid: false, message: "Key is not available for activation.", apiSource: "ovh" });
       }
-      const keyData = data.data;
-      if (keyData.status === "available") {
-        return res.json({ valid: true, type: keyData.subscription || "Plus CDK", status: keyData.status });
-      } else if (keyData.status === "used" || keyData.status === "activated") {
-        const activatedFor = keyData.activated_for ?? keyData.used_by ?? keyData.email ?? keyData.activated_email ?? null;
-        const activatedAt = keyData.activated_at ?? keyData.used_at ?? keyData.activatedAt ?? null;
-        return res.json({
-          valid: false,
-          status: "used",
-          message: "This key has already been activated.",
-          activatedFor,
-          activatedAt,
-        });
-      } else if (keyData.status === "expired") {
-        return res.json({ valid: false, status: "expired", message: "This key has expired." });
+
+      // ── keys.ovh didn't find it — try Suppy ───────────────────────────────
+      const suppy = await suppyCheckKey(key.trim());
+      if (suppy && suppy.found) {
+        if (suppy.status === "available") {
+          const svc = suppy.service === "claude" ? "Claude" : "ChatGPT";
+          const planName = suppy.plan ? ` ${suppy.plan.charAt(0).toUpperCase() + suppy.plan.slice(1)}` : "";
+          const termName = suppy.term === "30d" ? " 1 Month" : suppy.term === "365d" ? " 1 Year" : "";
+          return res.json({
+            valid: true,
+            type: `${svc}${planName}${termName}`.trim() || "CDK",
+            status: "available",
+            apiSource: "suppy",
+            keyType: suppy.keyType,
+            service: suppy.service,
+          });
+        } else if (suppy.status === "activated") {
+          return res.json({
+            valid: false,
+            status: "used",
+            message: "This key has already been activated.",
+            activatedFor: suppy.activatedEmail,
+            activatedAt: suppy.activatedAt,
+            apiSource: "suppy",
+          });
+        } else if (suppy.status === "reserved") {
+          return res.json({ valid: false, status: "reserved", message: "This key is currently reserved.", apiSource: "suppy" });
+        }
+        return res.json({ valid: false, message: "Key is not available for activation.", apiSource: "suppy" });
       }
-      return res.json({ valid: false, message: "Key is not available for activation." });
+
+      // Neither API found it
+      const msg = data.error === "key_not_found" ? "Key not found or not available." : data.message || "Invalid key.";
+      return res.json({ valid: false, message: msg });
     } catch (err) {
       console.error("CDK validation error:", err);
       return res.status(500).json({ valid: false, message: "Validation service unavailable. Please try again." });
@@ -1773,12 +1901,43 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.post("/api/activate", async (req, res) => {
-    const { cdkKey, sessionData } = req.body;
+    const { cdkKey, sessionData, apiSource } = req.body;
     if (!cdkKey || !sessionData) {
       return res.json({ success: false, message: "CDK key and session data are required." });
     }
-    let accessToken: string;
     const rawSession = sessionData.trim();
+
+    // ── Route to Suppy for Suppy keys ─────────────────────────────────────────
+    if (apiSource === "suppy") {
+      try {
+        console.log("[activate/suppy] key:", cdkKey.trim().slice(0, 8) + "...");
+        const startRes = await suppyFetch("POST", "/chatgpt/keys/activate-session", { code: cdkKey.trim(), session: rawSession });
+        if (!startRes.ok) {
+          const errText = typeof startRes.data === "string" ? startRes.data : startRes.data?.message || "Activation failed.";
+          const suppyErrMap: Record<string, string> = {
+            no_access_token: "No access token found in session. Please copy the full JSON from chatgpt.com/api/auth/session.",
+            session_expired: "Your session has expired. Please get a fresh session token.",
+            session_invalid: "Invalid session. Please get a fresh session token.",
+            workspace_account: "Corporate/workspace accounts are not supported.",
+            "key already activated": "This key has already been activated.",
+            "key not found": "Key not found or not available.",
+          };
+          return res.json({ success: false, message: suppyErrMap[errText] || errText });
+        }
+        // Poll for completion (up to ~30s: 10 attempts × 3s)
+        const result = await suppyPollActivation(cdkKey.trim(), 10, 3000);
+        if (result.success) {
+          return res.json({ success: true, email: result.email, subscription: result.activationType });
+        }
+        return res.json({ success: false, message: result.message || "Activation failed." });
+      } catch (err) {
+        console.error("[activate/suppy] error:", err);
+        return res.status(500).json({ success: false, message: "Activation service unavailable. Please try again." });
+      }
+    }
+
+    // ── keys.ovh path (default) ────────────────────────────────────────────────
+    let accessToken: string;
     try {
       const parsed = JSON.parse(rawSession);
       accessToken = parsed.accessToken || parsed.access_token || parsed.token;
@@ -1796,7 +1955,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       console.log("[activate] full-session attempt: success:", data.success, "error:", data.error);
 
       if (!data.success && data.error === "token_invalid") {
-        // Fall back to just the access token
         data = await apiCall("POST", "/activate", { key: cdkKey.trim(), user_token: accessToken });
         console.log("[activate] token-only attempt: success:", data.success, "error:", data.error);
       }
@@ -1814,6 +1972,35 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.json({ success: false, message: msg });
     } catch (err) {
       console.error("Activation error:", err);
+      return res.status(500).json({ success: false, message: "Activation service unavailable. Please try again." });
+    }
+  });
+
+  // ── Suppy Team Key Activation (email-based) ───────────────────────────────
+  app.post("/api/activate-team", async (req, res) => {
+    const { cdkKey, email } = req.body;
+    if (!cdkKey || !email) {
+      return res.json({ success: false, message: "CDK key and email are required." });
+    }
+    if (typeof email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      return res.json({ success: false, message: "A valid email address is required." });
+    }
+    try {
+      console.log("[activate-team/suppy] key:", cdkKey.trim().slice(0, 8) + "... email:", email.trim());
+      const result = await suppyFetch("POST", "/chatgpt/keys/activate", { code: cdkKey.trim(), email: email.trim() });
+      if (result.ok && result.data?.key) {
+        return res.json({
+          success: true,
+          email: result.data.key.activated_email,
+          activationType: result.data.activation_type,
+          subscriptionEndsAt: result.data.key.subscription_ends_at ?? null,
+          subscriptionHours: result.data.key.subscription_hours ?? null,
+        });
+      }
+      const errText = typeof result.data === "string" ? result.data : result.data?.message || "Activation failed.";
+      return res.json({ success: false, message: errText });
+    } catch (err) {
+      console.error("[activate-team/suppy] error:", err);
       return res.status(500).json({ success: false, message: "Activation service unavailable. Please try again." });
     }
   });
