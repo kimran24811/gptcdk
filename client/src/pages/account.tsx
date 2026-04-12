@@ -121,24 +121,18 @@ function TopUpDialog({ open, onClose }: { open: boolean; onClose: () => void }) 
   const [deposit, setDeposit] = useState<DepositInfo | null>(null);
   const [checkResult, setCheckResult] = useState<{ status: string; message?: string; balanceCents?: number } | null>(null);
   const [txHashInput, setTxHashInput] = useState("");
-  const [scanning, setScanning] = useState(false);
-  const [scanSecondsLeft, setScanSecondsLeft] = useState(0);
-  const scanIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const scanCountdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [checking, setChecking] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const countdownParts = useCountdownParts(deposit?.expiresAt ?? null);
   const { copied: amountCopied, copy: copyAmount } = useCopied();
   const { copied: addrCopied, copy: copyAddr } = useCopied();
 
-  const SCAN_DURATION = 180;
-
-  const stopScanning = () => {
-    setScanning(false); setScanSecondsLeft(0);
-    if (scanIntervalRef.current) { clearInterval(scanIntervalRef.current); scanIntervalRef.current = null; }
-    if (scanCountdownRef.current) { clearInterval(scanCountdownRef.current); scanCountdownRef.current = null; }
+  const stopPolling = () => {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
   };
 
   const reset = () => {
-    stopScanning(); setStep(1); setAmountUsd(""); setDeposit(null); setCheckResult(null); setTxHashInput("");
+    stopPolling(); setStep(1); setAmountUsd(""); setDeposit(null); setCheckResult(null); setTxHashInput("");
   };
   const handleClose = () => { reset(); onClose(); };
 
@@ -154,7 +148,7 @@ function TopUpDialog({ open, onClose }: { open: boolean; onClose: () => void }) 
     onError: () => toast({ title: "Error", description: "Could not create deposit.", variant: "destructive" }),
   });
 
-  const doSingleCheck = async (depositId: number, txHash?: string): Promise<boolean> => {
+  const doCheck = async (depositId: number, txHash?: string): Promise<boolean> => {
     try {
       const body: Record<string, string> = {};
       if (txHash) body.txHash = txHash;
@@ -162,41 +156,39 @@ function TopUpDialog({ open, onClose }: { open: boolean; onClose: () => void }) 
       const data = await res.json();
       setCheckResult(data);
       if (data.status === "completed") {
-        stopScanning(); setStep(3);
+        stopPolling(); setStep(3);
         queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
         queryClient.invalidateQueries({ queryKey: ["/api/me/deposits"] });
         return true;
       } else if (data.status === "expired") {
-        stopScanning();
+        stopPolling();
         toast({ title: "Expired", description: data.message, variant: "destructive" });
         handleClose();
       }
       return false;
     } catch {
-      setCheckResult((prev: any) => prev ?? { status: "pending", message: "Network issue — retrying…" });
       return false;
     }
   };
 
-  const startScanning = async () => {
-    if (!deposit || scanning) return;
-    setScanning(true); setScanSecondsLeft(SCAN_DURATION);
-    const found = await doSingleCheck(deposit.id, txHashInput.trim() || undefined);
-    if (found) return;
-    scanCountdownRef.current = setInterval(() => setScanSecondsLeft((s) => Math.max(0, s - 1)), 1000);
-    let elapsed = 0;
-    scanIntervalRef.current = setInterval(async () => {
-      elapsed += 10;
-      if (elapsed >= SCAN_DURATION) {
-        stopScanning();
-        setCheckResult({ status: "pending", message: "Not detected after scanning — the server will keep checking in the background." });
-        return;
-      }
-      await doSingleCheck(deposit.id, txHashInput.trim() || undefined);
-    }, 10_000);
+  const manualCheck = async () => {
+    if (!deposit || checking) return;
+    setChecking(true);
+    await doCheck(deposit.id, txHashInput.trim() || undefined);
+    setChecking(false);
   };
 
-  useEffect(() => { return () => { stopScanning(); }; }, []);
+  // Auto-poll every 15s as soon as the deposit is created
+  useEffect(() => {
+    if (!deposit) return;
+    // Immediate first check
+    doCheck(deposit.id);
+    pollRef.current = setInterval(() => doCheck(deposit.id), 15_000);
+    return stopPolling;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deposit?.id]);
+
+  useEffect(() => { return () => { stopPolling(); }; }, []);
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && handleClose()}>
@@ -325,52 +317,50 @@ function TopUpDialog({ open, onClose }: { open: boolean; onClose: () => void }) 
                 </p>
               </div>
 
-              {/* TX hash (optional) */}
-              {!scanning && (
-                <div>
-                  <label className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest block mb-1.5">
-                    Transaction Hash <span className="font-normal normal-case">(optional, speeds up detection)</span>
-                  </label>
+              {/* Auto-watch status */}
+              <div className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-primary/5 border border-primary/20">
+                <div className="flex items-center gap-2">
+                  <span className="relative flex h-2.5 w-2.5">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-primary"></span>
+                  </span>
+                  <span className="text-xs font-medium text-primary">Watching for payment…</span>
+                </div>
+                <button
+                  onClick={manualCheck}
+                  disabled={checking}
+                  className="text-[11px] text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 flex items-center gap-1"
+                  data-testid="button-check-now"
+                >
+                  {checking ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+                  Check now
+                </button>
+              </div>
+
+              {/* Optional TX hash for faster detection */}
+              <div>
+                <label className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest block mb-1.5">
+                  Have a TX hash? <span className="font-normal normal-case text-muted-foreground/70">(optional — paste for instant verify)</span>
+                </label>
+                <div className="flex gap-2">
                   <Input
                     value={txHashInput}
                     onChange={(e) => setTxHashInput(e.target.value)}
-                    placeholder="0xabc123..."
+                    placeholder="0xabc123…"
                     className="font-mono text-xs h-9"
                     data-testid="input-tx-hash"
                   />
+                  {txHashInput.trim() && (
+                    <button
+                      onClick={manualCheck}
+                      disabled={checking}
+                      className="shrink-0 px-3 h-9 rounded-lg bg-primary text-primary-foreground text-xs font-semibold disabled:opacity-50"
+                    >
+                      {checking ? <Loader2 className="w-3 h-3 animate-spin" /> : "Verify"}
+                    </button>
+                  )}
                 </div>
-              )}
-
-              {/* Scan status */}
-              {scanning && (
-                <div className="flex items-center justify-center gap-2 py-1">
-                  <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
-                  <span className="text-xs text-primary font-medium">
-                    Scanning BSC blockchain… {Math.floor(scanSecondsLeft / 60)}:{String(scanSecondsLeft % 60).padStart(2, "0")}
-                  </span>
-                </div>
-              )}
-
-              {checkResult?.status === "pending" && checkResult.message && (
-                <div className="flex gap-2 p-2.5 rounded-lg bg-muted/40 border border-border">
-                  <AlertCircle className="w-3.5 h-3.5 text-muted-foreground shrink-0 mt-0.5" />
-                  <p className="text-xs text-muted-foreground">{checkResult.message}</p>
-                </div>
-              )}
-
-              {/* I Paid button */}
-              <button
-                onClick={startScanning}
-                disabled={scanning}
-                className="w-full h-12 rounded-xl bg-[#F5A623] hover:bg-[#e09520] disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold text-base flex items-center justify-center gap-2 transition-colors shadow-lg shadow-[#F5A623]/20"
-                data-testid="button-i-paid"
-              >
-                {scanning ? (
-                  <><Loader2 className="w-4 h-4 animate-spin" /> Scanning…</>
-                ) : (
-                  <>↑ I Paid</>
-                )}
-              </button>
+              </div>
 
               <button onClick={handleClose} className="w-full text-xs text-muted-foreground hover:text-foreground transition-colors py-1">
                 Cancel
