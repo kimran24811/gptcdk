@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -623,91 +624,119 @@ export default function ShopPage() {
       </section>}
 
       {/* ── Page Header ───────────────────────────────────────────────────── */}
-      <section className="max-w-6xl mx-auto px-3 sm:px-4 lg:px-6 pt-6 pb-3">
+      <motion.section
+        initial={{ opacity: 0, y: -12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4, ease: "easeOut" }}
+        className="max-w-6xl mx-auto px-3 sm:px-4 lg:px-6 pt-6 pb-4"
+      >
         <h1 className="text-2xl sm:text-3xl font-black text-foreground tracking-tight">Shop</h1>
         <p className="text-muted-foreground text-xs mt-1">Instant delivery · Crypto payment · 10k+ activations</p>
-      </section>
+      </motion.section>
 
       {/* ── Plans ─────────────────────────────────────────────────────────── */}
-      <section id="plans" className="max-w-6xl mx-auto px-3 sm:px-4 lg:px-6 py-3">
+      <section id="plans" className="max-w-6xl mx-auto px-3 sm:px-4 lg:px-6 pb-4">
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2.5 sm:gap-3">
-          {PLANS.map((plan) => (
-            <div
+          {PLANS.map((plan, i) => (
+            <motion.div
               key={plan.id}
-              className={`relative rounded-xl border p-3.5 flex flex-col transition-all duration-200 ${
+              initial={{ opacity: 0, y: 24 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.35, delay: i * 0.07, ease: "easeOut" }}
+              whileHover={{ y: -3, transition: { duration: 0.18 } }}
+              className={`relative rounded-xl border p-3.5 flex flex-col cursor-pointer ${
                 plan.popular
-                  ? "border-primary/60 bg-primary/5 shadow-md shadow-primary/10 hover:shadow-primary/20"
-                  : "border-border bg-card hover:border-primary/30"
+                  ? "border-primary/70 bg-primary/5 shadow-lg shadow-primary/15"
+                  : "border-border bg-card"
               }`}
+              style={plan.popular ? { boxShadow: "0 0 0 1px hsl(var(--primary)/0.3), 0 8px 24px hsl(var(--primary)/0.12)" } : undefined}
               data-testid={`plan-card-${plan.id}`}
             >
               {plan.popular && (
-                <div className="absolute -top-2.5 left-1/2 -translate-x-1/2 z-10">
-                  <span className="inline-flex items-center gap-1 bg-primary text-primary-foreground text-[10px] font-bold px-2 py-0.5 rounded-full shadow-md shadow-primary/30">
+                <motion.div
+                  initial={{ scale: 0.7, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  transition={{ delay: i * 0.07 + 0.2, type: "spring", stiffness: 400, damping: 20 }}
+                  className="absolute -top-2.5 left-1/2 -translate-x-1/2 z-10"
+                >
+                  <span className="inline-flex items-center gap-1 bg-primary text-primary-foreground text-[10px] font-bold px-2.5 py-0.5 rounded-full shadow-md shadow-primary/40">
                     <Star className="w-2.5 h-2.5 fill-current" />
                     Popular
                   </span>
-                </div>
+                </motion.div>
               )}
 
-              <div className="flex items-center gap-1.5 mb-2.5 mt-1">
-                <div className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-muted/60 border border-border text-[10px] font-medium text-muted-foreground">
+              <div className="flex items-center gap-1.5 mb-3 mt-1">
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-muted/70 border border-border text-[10px] font-semibold text-muted-foreground">
                   <Clock className="w-2.5 h-2.5" />
                   {plan.duration}
-                </div>
+                </span>
               </div>
 
-              <h3 className="text-xs font-bold text-foreground leading-tight mb-2.5">{plan.name}</h3>
+              <h3 className="text-xs font-bold text-foreground leading-tight mb-3">{plan.name}</h3>
 
-              <div className="mb-2.5">
-                <span className="text-2xl font-black text-foreground">${plan.price.toFixed(2)}</span>
-                <span className="text-xs text-muted-foreground ml-1">USDT</span>
+              <div className="mb-3">
+                <span className={`text-[1.6rem] font-black leading-none ${plan.popular ? "text-primary" : "text-foreground"}`}>
+                  ${plan.price.toFixed(2)}
+                </span>
+                <span className="text-[10px] text-muted-foreground ml-1">USDT</span>
               </div>
 
               <div className="flex items-center gap-1 text-[10px] text-muted-foreground mb-3 mt-auto">
                 <Zap className="w-3 h-3 text-primary shrink-0" />
-                <span>Auto delivery</span>
+                <span>Automatic delivery</span>
               </div>
 
-              <button
+              <motion.button
+                whileTap={{ scale: 0.96 }}
                 onClick={() => setOrderPlan(plan)}
                 data-testid={`button-get-now-${plan.id}`}
-                className={`w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold transition-all duration-200 ${
+                className={`w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold transition-colors duration-150 ${
                   plan.popular
-                    ? "bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm shadow-primary/20"
-                    : "bg-transparent border border-border text-foreground hover:border-primary/50 hover:bg-primary/5"
+                    ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                    : "bg-transparent border border-border text-foreground hover:border-primary/60 hover:bg-primary/5"
                 }`}
               >
                 Get Now <ArrowRight className="w-3 h-3" />
-              </button>
-            </div>
+              </motion.button>
+            </motion.div>
           ))}
 
           {/* Claude Pro card */}
-          <div
-            className="relative rounded-xl border border-[#D97757]/40 bg-[#D97757]/5 p-3.5 flex flex-col transition-all duration-200 hover:border-[#D97757]/60 hover:shadow-md hover:shadow-[#D97757]/10"
+          <motion.div
+            initial={{ opacity: 0, y: 24 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.35, delay: PLANS.length * 0.07, ease: "easeOut" }}
+            whileHover={{ y: -3, transition: { duration: 0.18 } }}
+            className="relative rounded-xl border border-[#D97757]/50 bg-[#D97757]/5 p-3.5 flex flex-col cursor-pointer"
+            style={{ boxShadow: "0 0 0 1px rgb(217 119 87 / 0.2)" }}
             data-testid="plan-card-claude"
           >
-            <div className="absolute -top-2.5 left-1/2 -translate-x-1/2 z-10">
-              <span className="inline-flex items-center gap-1 bg-[#D97757] text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-md shadow-[#D97757]/30">
+            <motion.div
+              initial={{ scale: 0.7, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{ delay: PLANS.length * 0.07 + 0.2, type: "spring", stiffness: 400, damping: 20 }}
+              className="absolute -top-2.5 left-1/2 -translate-x-1/2 z-10"
+            >
+              <span className="inline-flex items-center gap-1 bg-[#D97757] text-white text-[10px] font-bold px-2.5 py-0.5 rounded-full shadow-md">
                 <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
                 New
               </span>
-            </div>
+            </motion.div>
 
-            <div className="flex items-center gap-1.5 mb-2.5 mt-1">
-              <img src={claudeLogoPath} alt="Claude" className="w-5 h-5 rounded-md shrink-0" />
-              <div className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-[#D97757]/10 border border-[#D97757]/20 text-[10px] font-medium text-[#D97757]">
+            <div className="flex items-center gap-1.5 mb-3 mt-1">
+              <img src={claudeLogoPath} alt="Claude" className="w-4 h-4 rounded shrink-0" />
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-[#D97757]/10 border border-[#D97757]/25 text-[10px] font-semibold text-[#D97757]">
                 <Clock className="w-2.5 h-2.5" />
                 Weekly
-              </div>
+              </span>
             </div>
 
-            <h3 className="text-xs font-bold text-foreground leading-tight mb-2.5">Claude Pro</h3>
+            <h3 className="text-xs font-bold text-foreground leading-tight mb-3">Claude Pro</h3>
 
-            <div className="mb-2.5">
-              <span className="text-2xl font-black text-foreground">$2.30</span>
-              <span className="text-xs text-muted-foreground ml-1">USDT</span>
+            <div className="mb-3">
+              <span className="text-[1.6rem] font-black leading-none text-[#D97757]">$2.30</span>
+              <span className="text-[10px] text-muted-foreground ml-1">USDT</span>
             </div>
 
             <div className="flex items-center gap-1 text-[10px] text-muted-foreground mb-3 mt-auto">
@@ -715,52 +744,57 @@ export default function ShopPage() {
               <span>Via WhatsApp</span>
             </div>
 
-            <button
-              className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold bg-[#D97757] hover:bg-[#c9673f] text-white transition-all duration-200 shadow-sm shadow-[#D97757]/20"
+            <motion.button
+              whileTap={{ scale: 0.96 }}
+              className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold bg-[#D97757] hover:bg-[#c9673f] text-white transition-colors duration-150"
               onClick={() => setShowClaude(true)}
               data-testid="button-get-now-claude"
             >
               Get Now <ArrowRight className="w-3 h-3" />
-            </button>
-          </div>
+            </motion.button>
+          </motion.div>
         </div>
       </section>
 
       {/* ── Custom Products ───────────────────────────────────────────────── */}
       {(customProductsData?.data?.length ?? 0) > 0 && (
-        <section className="max-w-6xl mx-auto px-3 sm:px-4 lg:px-6 py-3">
+        <section className="max-w-6xl mx-auto px-3 sm:px-4 lg:px-6 pb-4">
           <div className="flex items-center gap-3 mb-4">
             <div className="h-px flex-1 bg-border" />
             <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">More Services</p>
             <div className="h-px flex-1 bg-border" />
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5 sm:gap-3">
-            {customProductsData!.data.map((p) => (
-              <div
+            {customProductsData!.data.map((p, i) => (
+              <motion.div
                 key={p.id}
-                className="relative rounded-xl border border-border bg-card p-3.5 flex flex-col hover:border-primary/30 transition-all duration-200"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.3, delay: i * 0.06, ease: "easeOut" }}
+                whileHover={{ y: -2, transition: { duration: 0.15 } }}
+                className="relative rounded-xl border border-border bg-card p-3.5 flex flex-col"
                 data-testid={`custom-product-card-${p.id}`}
               >
                 <div className="flex items-center gap-1.5 mb-2.5">
                   {p.logoData ? (
-                    <img src={p.logoData} alt={p.name} className="w-6 h-6 rounded-md object-cover shrink-0 border border-border" />
+                    <img src={p.logoData} alt={p.name} className="w-5 h-5 rounded object-cover shrink-0 border border-border" />
                   ) : (
-                    <div className="w-6 h-6 rounded-md bg-muted/40 flex items-center justify-center shrink-0 border border-border">
+                    <div className="w-5 h-5 rounded bg-muted/50 flex items-center justify-center shrink-0 border border-border">
                       <Store className="w-3 h-3 text-muted-foreground/40" />
                     </div>
                   )}
-                  <div className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-muted/60 border border-border text-[10px] font-medium text-muted-foreground">
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-muted/70 border border-border text-[10px] font-semibold text-muted-foreground">
                     <Zap className="w-2.5 h-2.5" />
                     Instant
-                  </div>
+                  </span>
                 </div>
 
                 <h3 className="text-xs font-bold text-foreground leading-tight mb-1">{p.name}</h3>
                 {p.description && <p className="text-[10px] text-muted-foreground mb-2.5 line-clamp-2">{p.description}</p>}
 
                 <div className="mb-2.5 mt-auto">
-                  <span className="text-2xl font-black text-foreground">${(p.priceCents / 100).toFixed(2)}</span>
-                  <span className="text-xs text-muted-foreground ml-1">USDT</span>
+                  <span className="text-[1.6rem] font-black leading-none text-foreground">${(p.priceCents / 100).toFixed(2)}</span>
+                  <span className="text-[10px] text-muted-foreground ml-1">USDT</span>
                 </div>
 
                 <div className="flex items-center justify-between mb-3">
@@ -771,26 +805,39 @@ export default function ShopPage() {
                   {p.stock === 0 && <span className="text-[10px] text-red-500 font-semibold">Out of stock</span>}
                 </div>
 
-                <button
+                <motion.button
+                  whileTap={{ scale: 0.96 }}
                   onClick={() => p.stock > 0 ? setCustomPurchaseTarget(p) : undefined}
                   disabled={p.stock === 0}
-                  className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold border border-border text-foreground hover:border-primary/50 hover:bg-primary/5 transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold border border-border text-foreground hover:border-primary/60 hover:bg-primary/5 transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed"
                   data-testid={`button-buy-custom-${p.id}`}
                 >
                   {p.stock === 0 ? "Out of Stock" : (<>Get Now <ArrowRight className="w-3 h-3" /></>)}
-                </button>
-              </div>
+                </motion.button>
+              </motion.div>
             ))}
           </div>
         </section>
       )}
 
       {/* ── Features strip ────────────────────────────────────────────────── */}
-      <section className="border-t border-border mt-3">
+      <motion.section
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.5, delay: 0.4 }}
+        className="border-t border-border mt-2"
+      >
         <div className="max-w-6xl mx-auto px-3 sm:px-4 lg:px-6 py-4">
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
-            {FEATURES.map((f) => (
-              <div key={f.title} className="flex items-center gap-2.5 rounded-xl border border-border bg-card px-3 py-2.5 hover:border-primary/20 transition-colors">
+            {FEATURES.map((f, i) => (
+              <motion.div
+                key={f.title}
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.3, delay: 0.4 + i * 0.06 }}
+                whileHover={{ scale: 1.02, transition: { duration: 0.15 } }}
+                className="flex items-center gap-2.5 rounded-xl border border-border bg-card px-3 py-2.5 hover:border-primary/25 transition-colors duration-150"
+              >
                 <div className={`w-7 h-7 rounded-lg ${f.bg} flex items-center justify-center shrink-0`}>
                   <f.icon className={`w-3.5 h-3.5 ${f.color}`} />
                 </div>
@@ -798,11 +845,11 @@ export default function ShopPage() {
                   <p className="text-[11px] font-bold text-foreground">{f.title}</p>
                   <p className="text-[10px] text-muted-foreground leading-tight hidden sm:block">{f.desc}</p>
                 </div>
-              </div>
+              </motion.div>
             ))}
           </div>
         </div>
-      </section>
+      </motion.section>
     </PageLayout>
   );
 }
