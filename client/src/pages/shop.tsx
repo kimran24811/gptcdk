@@ -9,6 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
+import { PageLayout } from "@/components/page-layout";
 
 const WHATSAPP = "+447577308067";
 
@@ -533,7 +534,7 @@ export default function ShopPage() {
   });
 
   return (
-    <div className="min-h-screen bg-background">
+    <PageLayout fullWidth>
       <DeliveryDialog result={deliveryResult} onClose={() => setDeliveryResult(null)} />
       <OrderDialog plan={orderPlan} onClose={() => setOrderPlan(null)} onSuccess={setDeliveryResult} />
       <ClaudeDialog open={showClaude} onClose={() => setShowClaude(false)} />
@@ -546,8 +547,8 @@ export default function ShopPage() {
       )}
       <CustomDeliveryDialog result={customDeliveryResult} onClose={() => setCustomDeliveryResult(null)} />
 
-      {/* ── Hero ──────────────────────────────────────────────────────────── */}
-      <section className="relative overflow-hidden bg-background border-b border-border">
+      {/* ── Hero (hidden — kept for reference only) ───────────────────────── */}
+      {false && <section className="relative overflow-hidden bg-background border-b border-border">
         <div className="absolute inset-0 pointer-events-none">
           <div className="absolute -top-32 -left-32 w-[600px] h-[600px] rounded-full bg-primary/5 blur-3xl" />
           <div className="absolute top-0 right-0 w-[400px] h-[400px] rounded-full bg-primary/5 blur-3xl" />
@@ -619,7 +620,7 @@ export default function ShopPage() {
             </div>
           </div>
         </div>
-      </section>
+      </section>}
 
       {/* ── Custom Products ───────────────────────────────────────────────── */}
       {(customProductsData?.data?.length ?? 0) > 0 && (
@@ -682,7 +683,7 @@ export default function ShopPage() {
       )}
 
       {/* ── Plans ─────────────────────────────────────────────────────────── */}
-      <section id="plans" className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-16 sm:py-24">
+      <section id="plans" className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12">
         <div className="text-center mb-12">
           <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-primary/30 bg-primary/5 text-primary text-xs font-semibold mb-4">
             <Zap className="w-3 h-3" />
@@ -807,6 +808,6 @@ export default function ShopPage() {
           </div>
         </div>
       </section>
-    </div>
+    </PageLayout>
   );
 }

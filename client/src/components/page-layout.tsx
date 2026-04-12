@@ -13,9 +13,11 @@ function formatBalance(cents: number) {
 export function PageLayout({
   children,
   maxWidth = "max-w-3xl",
+  fullWidth = false,
 }: {
   children: React.ReactNode;
   maxWidth?: string;
+  fullWidth?: boolean;
 }) {
   const [location] = useLocation();
   const { theme, toggle } = useTheme();
@@ -130,7 +132,7 @@ export function PageLayout({
       </header>
 
       {/* ── PAGE CONTENT ── */}
-      <main className={`${maxWidth} mx-auto w-full px-4 py-6 sm:py-10 flex-1 pb-24 sm:pb-10`}>
+      <main className={fullWidth ? "flex-1 pb-24 sm:pb-10 w-full" : `${maxWidth} mx-auto w-full px-4 py-6 sm:py-10 flex-1 pb-24 sm:pb-10`}>
         {children}
       </main>
 
