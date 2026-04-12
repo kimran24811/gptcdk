@@ -83,6 +83,27 @@ function useCountdown(expiresAt: string | null) {
   return remaining;
 }
 
+function useCountdownParts(expiresAt: string | null) {
+  const [parts, setParts] = useState({ h: 0, m: 0, s: 0, expired: false });
+  useEffect(() => {
+    if (!expiresAt) return;
+    const update = () => {
+      const diff = new Date(expiresAt).getTime() - Date.now();
+      if (diff <= 0) { setParts({ h: 0, m: 0, s: 0, expired: true }); return; }
+      setParts({
+        h: Math.floor(diff / 3600000),
+        m: Math.floor((diff % 3600000) / 60000),
+        s: Math.floor((diff % 60000) / 1000),
+        expired: false,
+      });
+    };
+    update();
+    const interval = setInterval(update, 1000);
+    return () => clearInterval(interval);
+  }, [expiresAt]);
+  return parts;
+}
+
 interface DepositInfo {
   id: number;
   amountUsdt: string;
@@ -104,26 +125,21 @@ function TopUpDialog({ open, onClose }: { open: boolean; onClose: () => void }) 
   const [scanSecondsLeft, setScanSecondsLeft] = useState(0);
   const scanIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const scanCountdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const countdown = useCountdown(deposit?.expiresAt ?? null);
+  const countdownParts = useCountdownParts(deposit?.expiresAt ?? null);
+  const { copied: amountCopied, copy: copyAmount } = useCopied();
+  const { copied: addrCopied, copy: copyAddr } = useCopied();
 
-  const SCAN_DURATION = 180; // 3 minutes
+  const SCAN_DURATION = 180;
 
   const stopScanning = () => {
-    setScanning(false);
-    setScanSecondsLeft(0);
+    setScanning(false); setScanSecondsLeft(0);
     if (scanIntervalRef.current) { clearInterval(scanIntervalRef.current); scanIntervalRef.current = null; }
     if (scanCountdownRef.current) { clearInterval(scanCountdownRef.current); scanCountdownRef.current = null; }
   };
 
   const reset = () => {
-    stopScanning();
-    setStep(1);
-    setAmountUsd("");
-    setDeposit(null);
-    setCheckResult(null);
-    setTxHashInput("");
+    stopScanning(); setStep(1); setAmountUsd(""); setDeposit(null); setCheckResult(null); setTxHashInput("");
   };
-
   const handleClose = () => { reset(); onClose(); };
 
   const createDeposit = useMutation({
@@ -132,12 +148,8 @@ function TopUpDialog({ open, onClose }: { open: boolean; onClose: () => void }) 
       return res.json();
     },
     onSuccess: (data) => {
-      if (data.success) {
-        setDeposit(data.deposit);
-        setStep(2);
-      } else {
-        toast({ title: "Error", description: data.message, variant: "destructive" });
-      }
+      if (data.success) { setDeposit(data.deposit); setStep(2); }
+      else toast({ title: "Error", description: data.message, variant: "destructive" });
     },
     onError: () => toast({ title: "Error", description: "Could not create deposit.", variant: "destructive" }),
   });
@@ -150,8 +162,7 @@ function TopUpDialog({ open, onClose }: { open: boolean; onClose: () => void }) 
       const data = await res.json();
       setCheckResult(data);
       if (data.status === "completed") {
-        stopScanning();
-        setStep(3);
+        stopScanning(); setStep(3);
         queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
         queryClient.invalidateQueries({ queryKey: ["/api/me/deposits"] });
         return true;
@@ -159,7 +170,6 @@ function TopUpDialog({ open, onClose }: { open: boolean; onClose: () => void }) 
         stopScanning();
         toast({ title: "Expired", description: data.message, variant: "destructive" });
         handleClose();
-        return false;
       }
       return false;
     } catch {
@@ -169,216 +179,227 @@ function TopUpDialog({ open, onClose }: { open: boolean; onClose: () => void }) 
   };
 
   const startScanning = async () => {
-    if (!deposit) return;
-    if (scanning) return;
-    setScanning(true);
-    setScanSecondsLeft(SCAN_DURATION);
-
-    // Immediate first check
+    if (!deposit || scanning) return;
+    setScanning(true); setScanSecondsLeft(SCAN_DURATION);
     const found = await doSingleCheck(deposit.id, txHashInput.trim() || undefined);
     if (found) return;
-
-    // Countdown timer
-    scanCountdownRef.current = setInterval(() => {
-      setScanSecondsLeft((s) => {
-        if (s <= 1) return 0;
-        return s - 1;
-      });
-    }, 1000);
-
-    // Poll every 10 seconds
+    scanCountdownRef.current = setInterval(() => setScanSecondsLeft((s) => Math.max(0, s - 1)), 1000);
     let elapsed = 0;
     scanIntervalRef.current = setInterval(async () => {
       elapsed += 10;
       if (elapsed >= SCAN_DURATION) {
         stopScanning();
-        setCheckResult({ status: "pending", message: "Not detected after scanning — the server will keep checking automatically in the background." });
+        setCheckResult({ status: "pending", message: "Not detected after scanning — the server will keep checking in the background." });
         return;
       }
       await doSingleCheck(deposit.id, txHashInput.trim() || undefined);
     }, 10_000);
   };
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => { stopScanning(); };
-  }, []);
-
-  const networkLabel = "BEP-20 (BSC)";
+  useEffect(() => { return () => { stopScanning(); }; }, []);
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && handleClose()}>
-      <DialogContent className="sm:max-w-sm">
-        <DialogHeader>
-          <DialogTitle>
-            {step === 1 && "Top Up Balance"}
-            {step === 2 && "Send USDT"}
-            {step === 3 && "Payment Confirmed!"}
-          </DialogTitle>
-        </DialogHeader>
+      <DialogContent className="sm:max-w-sm p-0 overflow-hidden">
 
-        {/* Step 1: Amount + Network */}
+        {/* Step 1 — Amount */}
         {step === 1 && (
-          <div className="space-y-4 pt-1">
+          <div className="p-6 space-y-5">
             <div>
-              <label className="text-sm font-medium text-foreground block mb-1.5">Amount (USD)</label>
+              <h2 className="text-lg font-bold text-foreground">Top Up Balance</h2>
+              <p className="text-xs text-muted-foreground mt-0.5">Send USDT via BSC to your account</p>
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider block mb-2">Amount (USD)</label>
               <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">$</span>
+                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground font-semibold">$</span>
                 <Input
-                  type="number"
-                  min="1"
-                  step="1"
-                  placeholder="10"
+                  type="number" min="1" step="1" placeholder="10.00"
                   value={amountUsd}
                   onChange={(e) => setAmountUsd(e.target.value)}
-                  className="pl-7"
+                  onKeyDown={(e) => e.key === "Enter" && parseFloat(amountUsd) >= 1 && createDeposit.mutate()}
+                  className="pl-8 h-12 text-lg font-semibold"
                   data-testid="input-topup-amount"
                 />
               </div>
             </div>
-            <div>
-              <label className="text-sm font-medium text-foreground block mb-1.5">Network</label>
-              <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-primary bg-primary/5">
-                <div className="w-8 h-8 rounded-full bg-[#F0B90B]/20 flex items-center justify-center shrink-0">
-                  <span className="text-sm font-black text-[#F0B90B]">B</span>
-                </div>
-                <div>
-                  <div className="text-sm font-semibold text-foreground">BEP-20 (BSC)</div>
-                  <div className="text-xs text-muted-foreground">Binance Smart Chain · USDT</div>
-                </div>
+            <div className="flex items-center gap-3 px-4 py-3 rounded-xl border border-[#F0B90B]/30 bg-[#F0B90B]/5">
+              <div className="w-9 h-9 rounded-full bg-[#F0B90B] flex items-center justify-center shrink-0 text-black font-black text-sm">B</div>
+              <div>
+                <div className="text-sm font-bold text-foreground">BEP-20 · USDT</div>
+                <div className="text-xs text-muted-foreground">Binance Smart Chain</div>
               </div>
+              <div className="ml-auto text-xs font-medium text-[#F0B90B] bg-[#F0B90B]/10 px-2 py-0.5 rounded-full">Only network</div>
             </div>
             <Button
-              className="w-full"
+              className="w-full h-11 text-base font-bold"
               disabled={!amountUsd || parseFloat(amountUsd) < 1 || createDeposit.isPending}
               onClick={() => createDeposit.mutate()}
               data-testid="button-create-deposit"
             >
               {createDeposit.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-              Continue
+              Proceed to Payment
             </Button>
           </div>
         )}
 
-        {/* Step 2: QR + Address + I Paid */}
+        {/* Step 2 — Payment */}
         {step === 2 && deposit && (
-          <div className="space-y-4 pt-1">
-            {/* Amount to send */}
-            <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-center">
-              <div className="text-xs text-muted-foreground mb-0.5">Send EXACTLY this amount</div>
-              <div className="text-2xl font-black text-foreground tracking-tight">{deposit.amountUsdt} <span className="text-base font-semibold text-muted-foreground">USDT</span></div>
-              <div className="text-xs text-muted-foreground mt-0.5">{networkLabel}</div>
-              <div className="flex justify-center mt-2">
-                <CopyBtn text={deposit.amountUsdt} label="usdt-amount" />
+          <div>
+            {/* Header bar */}
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-border bg-muted/30">
+              <button onClick={() => { reset(); setStep(1); }} className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
+                <ArrowLeft className="w-3.5 h-3.5" /> Back
+              </button>
+              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">Send Payment</span>
+              <span className="text-xs text-muted-foreground">BSC</span>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {/* Big amount */}
+              <div className="text-center py-2">
+                <p className="text-xs text-muted-foreground uppercase tracking-widest mb-1">Send exactly</p>
+                <div className="flex items-baseline justify-center gap-2">
+                  <span className="text-4xl font-black text-foreground tracking-tight">{deposit.amountUsdt}</span>
+                  <span className="text-base font-semibold text-muted-foreground">USDT</span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">≈ ${(deposit.amountCents / 100).toFixed(2)} USD</p>
+                <button
+                  onClick={() => copyAmount(deposit.amountUsdt)}
+                  className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-border text-xs font-medium text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-all"
+                  data-testid="button-copy-amount"
+                >
+                  {amountCopied ? <Check className="w-3 h-3 text-primary" /> : <Copy className="w-3 h-3" />}
+                  {amountCopied ? "Copied!" : "Copy amount"}
+                </button>
               </div>
-            </div>
 
-            {/* QR code */}
-            <div className="flex justify-center">
-              <div className="p-3 bg-white rounded-xl border border-border">
-                <QRCodeSVG value={deposit.walletAddress} size={140} />
+              {/* Countdown blocks */}
+              <div className="flex items-center justify-center gap-2">
+                {[
+                  { val: countdownParts.h, label: "HR" },
+                  { val: countdownParts.m, label: "MIN" },
+                  { val: countdownParts.s, label: "SEC" },
+                ].map(({ val, label }, i) => (
+                  <div key={label}>
+                    <div className="flex items-center gap-2">
+                      <div className="flex flex-col items-center">
+                        <div className="w-14 h-12 rounded-lg bg-muted/60 border border-border flex items-center justify-center">
+                          <span className="text-xl font-black text-foreground font-mono">{String(val).padStart(2, "0")}</span>
+                        </div>
+                        <span className="text-[9px] font-bold text-muted-foreground mt-1 tracking-widest">{label}</span>
+                      </div>
+                      {i < 2 && <span className="text-lg font-black text-muted-foreground mb-3">:</span>}
+                    </div>
+                  </div>
+                ))}
               </div>
-            </div>
 
-            {/* Wallet address */}
-            <div className="rounded-lg border border-border p-3">
-              <div className="text-xs text-muted-foreground mb-1">Send to address</div>
-              <div className="flex items-center gap-2">
-                <code className="text-xs font-mono text-foreground flex-1 break-all leading-relaxed">{deposit.walletAddress}</code>
-                <CopyBtn text={deposit.walletAddress} label="wallet-address" />
+              {/* QR code */}
+              <div className="flex justify-center">
+                <div className="p-3 bg-white rounded-2xl border border-border shadow-sm">
+                  <QRCodeSVG value={deposit.walletAddress} size={130} />
+                </div>
               </div>
-            </div>
 
-            {/* Warning */}
-            <div className="flex gap-2 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20">
-              <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
-              <p className="text-xs text-amber-600 dark:text-amber-400">Send the EXACT amount shown. A different amount cannot be detected automatically.</p>
-            </div>
+              {/* Address */}
+              <div>
+                <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-1.5">Send to address</p>
+                <div className="flex items-center gap-2 p-3 rounded-xl border border-border bg-muted/20">
+                  <code className="text-xs font-mono text-foreground flex-1 break-all leading-relaxed">{deposit.walletAddress}</code>
+                  <button
+                    onClick={() => copyAddr(deposit.walletAddress)}
+                    className="shrink-0 p-1.5 rounded-lg hover:bg-muted transition-colors"
+                    data-testid="button-copy-address"
+                  >
+                    {addrCopied ? <Check className="w-4 h-4 text-primary" /> : <Copy className="w-4 h-4 text-muted-foreground" />}
+                  </button>
+                </div>
+              </div>
 
-            {/* Countdown */}
-            <div className="flex items-center justify-center gap-1.5 text-sm text-muted-foreground">
-              <Clock className="w-4 h-4" />
-              <span>Expires in <span className="font-mono font-semibold text-foreground">{countdown}</span></span>
-            </div>
+              {/* Warning */}
+              <div className="flex gap-2 p-3 rounded-xl bg-amber-500/8 border border-amber-500/20">
+                <AlertCircle className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" />
+                <p className="text-xs text-amber-600 dark:text-amber-400 leading-relaxed">
+                  Send the <strong>exact amount</strong> shown above. A different amount will not be detected automatically.
+                </p>
+              </div>
 
-            {/* Scanning status bar */}
-            <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
-              {scanning ? (
-                <>
-                  <Loader2 className="w-3 h-3 animate-spin text-primary" />
-                  <span className="text-primary font-medium">
-                    Scanning blockchain… ({Math.floor(scanSecondsLeft / 60)}:{String(scanSecondsLeft % 60).padStart(2, "0")} remaining)
-                  </span>
-                </>
-              ) : (
-                <><Clock className="w-3 h-3" /> Server auto-checks every 30 seconds</>
+              {/* TX hash (optional) */}
+              {!scanning && (
+                <div>
+                  <label className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest block mb-1.5">
+                    Transaction Hash <span className="font-normal normal-case">(optional, speeds up detection)</span>
+                  </label>
+                  <Input
+                    value={txHashInput}
+                    onChange={(e) => setTxHashInput(e.target.value)}
+                    placeholder="0xabc123..."
+                    className="font-mono text-xs h-9"
+                    data-testid="input-tx-hash"
+                  />
+                </div>
               )}
-            </div>
 
-            {/* TX Hash input */}
-            <div>
-              <label className="text-xs font-medium text-muted-foreground block mb-1">
-                Transaction Hash <span className="text-muted-foreground/60 font-normal">(optional — paste for faster detection)</span>
-              </label>
-              <Input
-                value={txHashInput}
-                onChange={(e) => setTxHashInput(e.target.value)}
-                placeholder="e.g. 0xabc123def456... (BSC transaction hash)"
-                className="font-mono text-xs"
-                disabled={scanning}
-                data-testid="input-tx-hash"
-              />
-            </div>
+              {/* Scan status */}
+              {scanning && (
+                <div className="flex items-center justify-center gap-2 py-1">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
+                  <span className="text-xs text-primary font-medium">
+                    Scanning BSC blockchain… {Math.floor(scanSecondsLeft / 60)}:{String(scanSecondsLeft % 60).padStart(2, "0")}
+                  </span>
+                </div>
+              )}
 
-            {/* Check result message */}
-            {checkResult?.status === "pending" && checkResult.message && (
-              <div className="flex gap-2 p-2.5 rounded-lg bg-muted/50 border border-border">
-                <AlertCircle className="w-4 h-4 text-muted-foreground shrink-0 mt-0.5" />
-                <p className="text-xs text-muted-foreground">{checkResult.message}</p>
-              </div>
-            )}
+              {checkResult?.status === "pending" && checkResult.message && (
+                <div className="flex gap-2 p-2.5 rounded-lg bg-muted/40 border border-border">
+                  <AlertCircle className="w-3.5 h-3.5 text-muted-foreground shrink-0 mt-0.5" />
+                  <p className="text-xs text-muted-foreground">{checkResult.message}</p>
+                </div>
+              )}
 
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={() => { reset(); setStep(1); }} className="gap-1.5" disabled={scanning}>
-                <ArrowLeft className="w-3.5 h-3.5" />
-                Back
-              </Button>
-              <Button
-                className="flex-1"
+              {/* I Paid button */}
+              <button
                 onClick={startScanning}
                 disabled={scanning}
+                className="w-full h-12 rounded-xl bg-[#F5A623] hover:bg-[#e09520] disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold text-base flex items-center justify-center gap-2 transition-colors shadow-lg shadow-[#F5A623]/20"
                 data-testid="button-i-paid"
               >
                 {scanning ? (
-                  <><Loader2 className="w-4 h-4 animate-spin mr-2" /> Scanning…</>
+                  <><Loader2 className="w-4 h-4 animate-spin" /> Scanning…</>
                 ) : (
-                  "I Paid — Scan Now"
+                  <>↑ I Paid</>
                 )}
-              </Button>
+              </button>
+
+              <button onClick={handleClose} className="w-full text-xs text-muted-foreground hover:text-foreground transition-colors py-1">
+                Cancel
+              </button>
             </div>
           </div>
         )}
 
-        {/* Step 3: Success */}
+        {/* Step 3 — Success */}
         {step === 3 && checkResult && (
-          <div className="space-y-4 pt-1 text-center">
-            <div className="flex justify-center">
+          <div className="p-6 text-center space-y-4">
+            <div className="flex justify-center pt-2">
               <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
                 <CheckCircle2 className="w-9 h-9 text-primary" />
               </div>
             </div>
             <div>
-              <p className="text-lg font-bold text-foreground">Payment Received!</p>
+              <p className="text-xl font-black text-foreground">Payment Received!</p>
               <p className="text-sm text-muted-foreground mt-1">
-                ${(deposit!.amountCents / 100).toFixed(2)} has been added to your balance.
+                ${(deposit!.amountCents / 100).toFixed(2)} has been credited to your balance.
               </p>
               {checkResult.balanceCents !== null && checkResult.balanceCents !== undefined && (
-                <p className="text-2xl font-black text-foreground mt-2">
-                  ${(checkResult.balanceCents / 100).toFixed(2)} <span className="text-sm font-normal text-muted-foreground">new balance</span>
-                </p>
+                <div className="mt-3 py-2 px-4 rounded-xl bg-primary/5 border border-primary/20 inline-block">
+                  <p className="text-2xl font-black text-primary">${(checkResult.balanceCents / 100).toFixed(2)}</p>
+                  <p className="text-xs text-muted-foreground">new balance</p>
+                </div>
               )}
             </div>
-            <Button className="w-full" onClick={handleClose} data-testid="button-deposit-done">
+            <Button className="w-full h-11" onClick={handleClose} data-testid="button-deposit-done">
               Done
             </Button>
           </div>
@@ -713,75 +734,88 @@ export default function AccountPage() {
     <PageLayout>
       <TopUpDialog open={topUpOpen} onClose={() => setTopUpOpen(false)} />
 
-      <div className="mb-6 sm:mb-8">
-        <h1 className="text-2xl sm:text-3xl font-bold text-foreground mb-1">My Account</h1>
-        <p className="text-muted-foreground text-sm">Manage your balance and view orders</p>
-      </div>
+      <div className="max-w-2xl mx-auto space-y-5">
+        {/* Page title */}
+        <div className="pt-2">
+          <h1 className="text-2xl font-black text-foreground">My Account</h1>
+          <p className="text-muted-foreground text-xs mt-0.5">Manage your balance and view orders</p>
+        </div>
 
-      <div className="space-y-5">
         {/* Balance card */}
-        <Card className="border border-card-border">
-          <CardContent className="p-5 sm:p-6">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <div className="flex items-center gap-2 mb-2">
-                  <Wallet className="w-4 h-4 text-primary" />
-                  <span className="text-sm font-semibold text-foreground">Balance</span>
+        <div className="rounded-2xl border border-border bg-card overflow-hidden">
+          <div className="p-5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+                  <Wallet className="w-5 h-5 text-primary" />
                 </div>
-                <div className="text-4xl font-black text-foreground" data-testid="text-balance">
-                  ${(user.balanceCents / 100).toFixed(2)}
+                <div>
+                  <p className="text-sm font-semibold text-foreground">Balance</p>
+                  <p className="text-xs text-muted-foreground">Your account balance for purchases</p>
                 </div>
-                <div className="text-xs text-muted-foreground mt-1">Available to spend in the Shop</div>
               </div>
               <div className="text-right">
-                <div className="text-sm font-medium text-foreground mb-0.5 truncate max-w-[160px]">{user.name}</div>
-                <div className="text-xs text-muted-foreground truncate max-w-[160px]">{user.email}</div>
+                <p className="text-2xl font-black text-primary" data-testid="text-balance">
+                  ${(user.balanceCents / 100).toFixed(2)}
+                </p>
               </div>
             </div>
+          </div>
 
-            {/* Top-up actions */}
-            <div className="mt-5 pt-4 border-t border-border space-y-3">
-              <Button
-                className="w-full gap-2"
-                onClick={() => setTopUpOpen(true)}
-                data-testid="button-topup-crypto"
-              >
-                <Plus className="w-4 h-4" />
-                Top Up with USDT
-              </Button>
-              <a href={whatsappUrl} target="_blank" rel="noopener noreferrer" data-testid="button-topup-whatsapp">
-                <Button variant="outline" className="w-full gap-2 border-[#25D366] text-[#25D366] hover:bg-[#25D366]/10">
-                  <SiWhatsapp className="w-4 h-4" />
-                  Contact on WhatsApp
-                </Button>
-              </a>
+          <div className="border-t border-border">
+            <button
+              onClick={() => setTopUpOpen(true)}
+              className="w-full flex items-center justify-center gap-2 py-3.5 text-sm font-bold text-primary hover:bg-primary/5 transition-colors"
+              data-testid="button-topup-crypto"
+            >
+              <Plus className="w-4 h-4" />
+              Top Up Balance
+            </button>
+          </div>
+
+          <div className="border-t border-border px-5 py-3 flex items-center justify-between">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-foreground truncate">{user.name}</p>
+              <p className="text-xs text-muted-foreground truncate">{user.email}</p>
             </div>
-          </CardContent>
-        </Card>
+            <a
+              href={whatsappUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 text-xs font-medium text-[#25D366] hover:opacity-80 transition-opacity shrink-0 ml-4"
+              data-testid="button-topup-whatsapp"
+            >
+              <SiWhatsapp className="w-3.5 h-3.5" />
+              WhatsApp
+            </a>
+          </div>
+        </div>
 
         {/* API Keys */}
-        <ApiKeysSection userId={user.id} />
+        <div className="rounded-2xl border border-border bg-card overflow-hidden">
+          <div className="px-5 pt-5 pb-4">
+            <ApiKeysSection userId={user.id} />
+          </div>
+        </div>
 
         {/* Orders */}
         <div>
-          <h2 className="text-base font-semibold text-foreground mb-3">Order History</h2>
+          <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-3">Order History</p>
           {ordersLoading ? (
             <div className="flex items-center justify-center py-10">
               <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
             </div>
           ) : orders.length === 0 ? (
-            <Card className="border border-card-border">
-              <CardContent className="p-8 text-center">
-                <Package className="w-10 h-10 text-muted-foreground/40 mx-auto mb-3" />
-                <p className="text-sm text-muted-foreground font-medium">No orders yet</p>
-                <p className="text-xs text-muted-foreground mt-1 mb-4">Head to the Shop to buy your first CDK keys</p>
-                <a href="/shop">
-                  <Button size="sm" variant="outline">Go to Shop</Button>
-                </a>
-              </CardContent>
-            </Card>
+            <div className="rounded-2xl border border-border bg-card p-8 text-center">
+              <Package className="w-9 h-9 text-muted-foreground/30 mx-auto mb-3" />
+              <p className="text-sm font-semibold text-foreground">No orders yet</p>
+              <p className="text-xs text-muted-foreground mt-1 mb-4">Head to the Shop to buy your first CDK keys</p>
+              <a href="/shop">
+                <Button size="sm" variant="outline">Go to Shop</Button>
+              </a>
+            </div>
           ) : (
-            <div className="space-y-2.5">
+            <div className="rounded-2xl border border-border bg-card overflow-hidden divide-y divide-border">
               {orders.map((order) => (
                 <OrderRow key={order.id} order={order} />
               ))}
