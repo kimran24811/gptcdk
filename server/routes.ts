@@ -1925,12 +1925,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           };
           return res.json({ success: false, message: suppyErrMap[errText] || errText });
         }
-        // Poll for completion (up to ~30s: 10 attempts × 3s)
-        const result = await suppyPollActivation(cdkKey.trim(), 10, 3000);
-        if (result.success) {
-          return res.json({ success: true, email: result.email, subscription: result.activationType });
-        }
-        return res.json({ success: false, message: result.message || "Activation failed." });
+        // Return immediately — frontend will poll /api/suppy-activation-status/:code
+        return res.json({ success: true, started: true, code: cdkKey.trim() });
       } catch (err) {
         console.error("[activate/suppy] error:", err);
         return res.status(500).json({ success: false, message: "Activation service unavailable. Please try again." });
@@ -2003,6 +1999,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (err) {
       console.error("[activate-team/suppy] error:", err);
       return res.status(500).json({ success: false, message: "Activation service unavailable. Please try again." });
+    }
+  });
+
+  // ── Suppy Activation Status Polling ──────────────────────────────────────
+  app.get("/api/suppy-activation-status/:code", async (req, res) => {
+    const { code } = req.params;
+    try {
+      const result = await suppyFetch("GET", `/chatgpt/keys/activation-status/${encodeURIComponent(code)}`);
+      if (result.status === 404) {
+        return res.json({ pending: true, status: "started" });
+      }
+      if (!result.ok || !result.data || typeof result.data !== "object") {
+        return res.json({ pending: true, status: "started" });
+      }
+      const d = result.data;
+      const status = typeof d.status === "string" ? d.status.toLowerCase() : "";
+      if (status === "subscription_sent") {
+        return res.json({ pending: false, success: true, email: d.key?.activated_email ?? null, activationType: d.activation_type });
+      }
+      if (status === "error") {
+        return res.json({ pending: false, success: false, message: d.message || "Activation failed on provider side." });
+      }
+      // started | account_found — still in progress
+      return res.json({ pending: true, status: d.status });
+    } catch (err) {
+      console.error("[suppy-status] poll error:", err);
+      return res.json({ pending: true, status: "started" });
     }
   });
 

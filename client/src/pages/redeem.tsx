@@ -135,6 +135,12 @@ export default function RedeemPage() {
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [activationResult, setActivationResult] = useState<ActivationResult | null>(null);
 
+  // ── Suppy polling ─────────────────────────────────────────────────────────
+  const [suppyPolling, setSuppyPolling] = useState(false);
+  const [suppyPollCount, setSuppyPollCount] = useState(0);
+  const [suppyFailed, setSuppyFailed] = useState<string | null>(null);
+  const suppyPollerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // ── Nitro mode ────────────────────────────────────────────────────────────
   const [nitroSession, setNitroSession] = useState("");
   const [nitroParsed, setNitroParsed] = useState<NitroSession | null>(null);
@@ -157,9 +163,12 @@ export default function RedeemPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Cleanup poller on unmount
+  // Cleanup pollers on unmount
   useEffect(() => {
-    return () => { if (nitroPollerRef.current) clearTimeout(nitroPollerRef.current); };
+    return () => {
+      if (nitroPollerRef.current) clearTimeout(nitroPollerRef.current);
+      if (suppyPollerRef.current) clearTimeout(suppyPollerRef.current);
+    };
   }, []);
 
   function switchMode(m: Mode) {
@@ -181,6 +190,11 @@ export default function RedeemPage() {
     setTeamEmail("");
     setTeamEmailError(null);
     setTeamResult(null);
+    // suppy polling
+    setSuppyPolling(false);
+    setSuppyPollCount(0);
+    setSuppyFailed(null);
+    if (suppyPollerRef.current) clearTimeout(suppyPollerRef.current);
     // nitro
     setNitroSession("");
     setNitroParsed(null);
@@ -241,7 +255,13 @@ export default function RedeemPage() {
       return res.json();
     },
     onSuccess: (data) => {
-      if (data.success) {
+      if (data.success && data.started) {
+        // Suppy async activation — start polling
+        setSuppyPolling(true);
+        setSuppyFailed(null);
+        setSuppyPollCount(0);
+        pollSuppy(cdkKey.trim(), 0);
+      } else if (data.success) {
         setActivationResult({ email: data.email, product: data.product, subscription: data.subscription, activatedAt: data.activatedAt });
         setStep(3);
       } else {
@@ -250,6 +270,31 @@ export default function RedeemPage() {
     },
     onError: () => toast({ title: "Activation error", description: "Could not reach the activation service. Please try again.", variant: "destructive" }),
   });
+
+  // ── Suppy: poll activation status ────────────────────────────────────────
+  async function pollSuppy(code: string, attempt: number) {
+    setSuppyPollCount(attempt + 1);
+    if (attempt >= 40) {
+      setSuppyPolling(false);
+      setSuppyFailed("Activation is taking longer than expected. Please check your ChatGPT account in a few minutes — the subscription may already be active.");
+      return;
+    }
+    try {
+      const res = await fetch(`/api/suppy-activation-status/${encodeURIComponent(code)}`, { credentials: "include" });
+      const data = await res.json();
+      if (data.pending === false) {
+        setSuppyPolling(false);
+        if (data.success) {
+          setActivationResult({ email: data.email, subscription: data.activationType });
+          setStep(3);
+        } else {
+          setSuppyFailed(data.message || "Activation failed. Please try again.");
+        }
+        return;
+      }
+    } catch { /* swallow, retry */ }
+    suppyPollerRef.current = setTimeout(() => pollSuppy(code, attempt + 1), 4000);
+  }
 
   // ── Team key activation (Suppy) ───────────────────────────────────────────
   const activateTeam = useMutation({
@@ -631,12 +676,39 @@ export default function RedeemPage() {
               <Button
                 className="w-full gap-2" size="lg"
                 onClick={() => activate.mutate()}
-                disabled={(!sessionValidated && cdkInfo?.service !== "claude") || !sessionData.trim() || step !== 2 || activate.isPending}
+                disabled={(!sessionValidated && cdkInfo?.service !== "claude") || !sessionData.trim() || step !== 2 || activate.isPending || suppyPolling}
                 data-testid="button-activate"
               >
-                {activate.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-                {activate.isPending ? "Activating..." : "Activate"}
+                {(activate.isPending || suppyPolling) ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                {activate.isPending ? "Activating..." : suppyPolling ? "Activating..." : "Activate"}
               </Button>
+
+              {/* Suppy polling progress */}
+              {suppyPolling && (
+                <div className="rounded-xl border border-border bg-muted/20 p-4 flex flex-col items-center gap-3 text-center">
+                  <div className="flex items-center gap-3">
+                    <RefreshCw className="w-5 h-5 text-primary animate-spin" />
+                    <div>
+                      <p className="text-sm font-semibold text-foreground">Activating your subscription...</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">Check {suppyPollCount} · This may take 1–3 minutes</p>
+                    </div>
+                  </div>
+                  <div className="w-full bg-muted rounded-full h-1.5 overflow-hidden">
+                    <div className="bg-primary h-full rounded-full transition-all duration-1000" style={{ width: `${Math.min(100, (suppyPollCount / 40) * 100)}%` }} />
+                  </div>
+                </div>
+              )}
+
+              {/* Suppy failure message */}
+              {suppyFailed && !suppyPolling && (
+                <div className="flex items-start gap-3 rounded-xl border border-destructive/30 bg-destructive/5 p-4">
+                  <XCircle className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm font-semibold text-destructive">Activation failed</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{suppyFailed}</p>
+                  </div>
+                </div>
+              )}
 
               <div className="flex items-start gap-2 text-xs text-muted-foreground">
                 <AlertTriangle className="w-4 h-4 text-yellow-600 dark:text-yellow-400 shrink-0 mt-0.5" />
