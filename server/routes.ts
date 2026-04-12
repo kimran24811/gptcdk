@@ -34,14 +34,27 @@ async function bscRpcCall(endpoint: string, method: string, params: unknown[], i
   return data.result;
 }
 
+// BSC produces ~1 block every 3 seconds
+const BSC_BLOCK_TIME_S = 3;
+// Most public BSC RPC nodes accept up to 5 000 blocks per eth_getLogs request (~4 hours)
+const BSC_MAX_LOOKBACK_BLOCKS = 5000;
+
 /**
- * Batch-scan recent BEP-20 USDT transfers to our wallet using a public BSC RPC node.
+ * Batch-scan BEP-20 USDT transfers to our wallet using a public BSC RPC node.
  * Returns a Map of amountUsdt → txHash for all matched amounts.
- * Uses ~200 recent blocks (~10 min on BSC at 3s/block) to cover timing windows.
+ *
+ * @param pendingAmounts  List of USDT amount strings to look for
+ * @param lookbackBlocks  How many blocks to scan back from "latest"
+ *                        (capped at BSC_MAX_LOOKBACK_BLOCKS = ~4 hours)
  */
-async function scanBscDeposits(pendingAmounts: string[]): Promise<Map<string, string>> {
+async function scanBscDeposits(
+  pendingAmounts: string[],
+  lookbackBlocks = 200,
+): Promise<Map<string, string>> {
   const results = new Map<string, string>();
   if (pendingAmounts.length === 0) return results;
+
+  const safeBlocks = Math.min(lookbackBlocks, BSC_MAX_LOOKBACK_BLOCKS);
 
   // Pre-compute expected wei ranges for each pending amount
   const ranges = pendingAmounts.map((amt) => {
@@ -59,8 +72,7 @@ async function scanBscDeposits(pendingAmounts: string[]): Promise<Map<string, st
       const currentBlock = parseInt(blockHex, 16);
       if (!currentBlock || isNaN(currentBlock)) continue;
 
-      // Look back ~200 blocks (~10 minutes)
-      const fromBlock = "0x" + Math.max(0, currentBlock - 200).toString(16);
+      const fromBlock = "0x" + Math.max(0, currentBlock - safeBlocks).toString(16);
 
       // Fetch USDT Transfer logs where `to` is our wallet
       const logs = await bscRpcCall(rpc, "eth_getLogs", [{
@@ -189,11 +201,20 @@ export async function processAllPendingDeposits(): Promise<void> {
       .where(and(eq(depositRequests.status, "pending"), sql`expires_at > ${now}`));
     if (pending.length === 0) return;
 
-    console.log(`[deposit] Scanning ${pending.length} active pending deposit(s) via BSC RPC…`);
+    // Calculate how far back to scan: cover the full age of the oldest pending deposit
+    // + a 2-minute safety buffer.  Cap at BSC_MAX_LOOKBACK_BLOCKS (~4 hours).
+    const oldestMs = Math.min(...pending.map((d) => d.createdAt.getTime()));
+    const ageSeconds = Math.ceil((Date.now() - oldestMs) / 1000);
+    const lookbackBlocks = Math.min(
+      BSC_MAX_LOOKBACK_BLOCKS,
+      Math.ceil(ageSeconds / BSC_BLOCK_TIME_S) + 40, // +40 blocks (~2 min) buffer
+    );
+
+    console.log(`[deposit] Scanning ${pending.length} active pending deposit(s) via BSC RPC (lookback: ${lookbackBlocks} blocks ≈ ${Math.round(lookbackBlocks * BSC_BLOCK_TIME_S / 60)} min)…`);
 
     // One RPC call fetches logs for all pending amounts at once
     const amounts = pending.map((d) => d.amountUsdt);
-    const foundMap = await scanBscDeposits(amounts);
+    const foundMap = await scanBscDeposits(amounts, lookbackBlocks);
 
     for (const dep of pending) {
       const txHash = foundMap.get(dep.amountUsdt);
@@ -1415,7 +1436,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       // ── Batch-scan recent transfers on our BSC wallet ────────────────────────
       if (!found) {
-        const scanResults = await scanBscDeposits([deposit.amountUsdt]);
+        // Cover the full age of this deposit so a payment made shortly after creation
+        // is still found even if the user only checks hours later.
+        const depositAgeS = Math.ceil((Date.now() - deposit.createdAt.getTime()) / 1000);
+        const lookbackBlocks = Math.min(
+          BSC_MAX_LOOKBACK_BLOCKS,
+          Math.ceil(depositAgeS / BSC_BLOCK_TIME_S) + 40,
+        );
+        const scanResults = await scanBscDeposits([deposit.amountUsdt], lookbackBlocks);
         const scannedHash = scanResults.get(deposit.amountUsdt) ?? null;
         if (scannedHash) {
           found = true;
