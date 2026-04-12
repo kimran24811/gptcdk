@@ -328,7 +328,7 @@ async function suppyCheckKey(code: string): Promise<{
   const d = res.data;
   return {
     found: true,
-    status: d.status,
+    status: typeof d.status === "string" ? d.status.toLowerCase() : d.status,
     keyType: d.key_type,
     service: d.service,
     plan: d.plan,
