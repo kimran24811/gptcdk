@@ -14,57 +14,51 @@ import { PageLayout } from "@/components/page-layout";
 
 const WHATSAPP = "+447577308067";
 
-const PLANS = [
-  {
-    id: "plus-1m",
-    name: "ChatGPT Plus CDK",
-    duration: "1M",
-    durationLabel: "1 month",
-    price: 2.38,
-    fromPrice: 1.55,
-    popular: false,
-    hasBulk: true,
-    discounts: [
-      { qty: 10,  price: 2.15, pct: -12 },
-      { qty: 30,  price: 1.95, pct: -20 },
-      { qty: 50,  price: 1.75, pct: -29 },
-      { qty: 100, price: 1.55, pct: -37 },
-    ],
-  },
-  {
-    id: "plus-1y",
-    name: "ChatGPT Plus CDK",
-    duration: "1Y",
-    durationLabel: "1 year",
-    price: 28,
-    fromPrice: 28,
-    popular: true,
-    hasBulk: false,
-    discounts: [],
-  },
-  {
-    id: "go-1y",
-    name: "ChatGPT GO CDK",
-    duration: "1Y",
-    durationLabel: "1 year",
-    price: 5,
-    fromPrice: 5,
-    popular: false,
-    hasBulk: false,
-    discounts: [],
-  },
-  {
-    id: "pro-1m",
-    name: "ChatGPT Pro CDK",
-    duration: "1M",
-    durationLabel: "1 month",
-    price: 110,
-    fromPrice: 110,
-    popular: false,
-    hasBulk: false,
-    discounts: [],
-  },
-];
+// Bulk discounts keyed by planKey (admin can't edit these yet, kept here for reference)
+const PLAN_DISCOUNTS: Record<string, { qty: number; price: number; pct: number }[]> = {
+  "plus-1m": [
+    { qty: 10, price: 2.15, pct: -12 },
+    { qty: 30, price: 1.95, pct: -20 },
+    { qty: 50, price: 1.75, pct: -29 },
+    { qty: 100, price: 1.55, pct: -37 },
+  ],
+};
+
+interface MainPlan {
+  id: number;
+  planKey: string;
+  name: string;
+  duration: string;
+  durationLabel: string;
+  priceCents: number;
+  popular: number;
+  isNew: number;
+  service: string;
+  accentColor: string | null;
+  deliveryNote: string;
+  action: string;
+  active: number;
+  sortOrder: number;
+}
+
+// Shape OrderDialog expects
+interface DialogPlan {
+  id: string;
+  name: string;
+  durationLabel: string;
+  price: number;
+  discounts: { qty: number; price: number; pct: number }[];
+}
+
+function toDialogPlan(mp: MainPlan): DialogPlan {
+  return {
+    id: mp.planKey,
+    name: mp.name,
+    durationLabel: mp.durationLabel,
+    price: mp.priceCents / 100,
+    discounts: PLAN_DISCOUNTS[mp.planKey] ?? [],
+  };
+}
 
 const FEATURES = [
   {
@@ -174,9 +168,7 @@ function DeliveryDialog({ result, onClose }: { result: PurchaseResult | null; on
   );
 }
 
-type Plan = typeof PLANS[number];
-
-function OrderDialog({ plan, onClose, onSuccess }: { plan: Plan | null; onClose: () => void; onSuccess: (r: PurchaseResult) => void }) {
+function OrderDialog({ plan, onClose, onSuccess }: { plan: DialogPlan | null; onClose: () => void; onSuccess: (r: PurchaseResult) => void }) {
   const { toast } = useToast();
   const { user } = useAuth();
   const [quantity, setQuantity] = useState(1);
@@ -523,11 +515,17 @@ function CustomPurchaseDialog({ product, onClose, onSuccess }: { product: Custom
 
 export default function ShopPage() {
   const [, navigate] = useLocation();
-  const [orderPlan, setOrderPlan] = useState<Plan | null>(null);
+  const [orderPlan, setOrderPlan] = useState<DialogPlan | null>(null);
   const [deliveryResult, setDeliveryResult] = useState<PurchaseResult | null>(null);
   const [showClaude, setShowClaude] = useState(false);
   const [customPurchaseTarget, setCustomPurchaseTarget] = useState<CustomProduct | null>(null);
   const [customDeliveryResult, setCustomDeliveryResult] = useState<CustomDeliveryResult | null>(null);
+
+  const { data: mainPlansData } = useQuery<{ success: boolean; data: MainPlan[] }>({
+    queryKey: ["/api/main-plans"],
+    staleTime: 60_000,
+  });
+  const plans = mainPlansData?.data ?? [];
 
   const { data: customProductsData } = useQuery<{ success: boolean; data: CustomProduct[] }>({
     queryKey: ["/api/products/custom"],
@@ -637,122 +635,112 @@ export default function ShopPage() {
       {/* ── Plans ─────────────────────────────────────────────────────────── */}
       <section id="plans" className="max-w-6xl mx-auto px-3 sm:px-4 lg:px-6 pb-4">
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2.5 sm:gap-3">
-          {PLANS.map((plan, i) => (
-            <motion.div
-              key={plan.id}
-              initial={{ opacity: 0, y: 24 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.35, delay: i * 0.07, ease: "easeOut" }}
-              whileHover={{ y: -3, transition: { duration: 0.18 } }}
-              className={`relative rounded-xl border p-3.5 flex flex-col cursor-pointer ${
-                plan.popular
-                  ? "border-primary/70 bg-primary/5 shadow-lg shadow-primary/15"
-                  : "border-border bg-card"
-              }`}
-              style={plan.popular ? { boxShadow: "0 0 0 1px hsl(var(--primary)/0.3), 0 8px 24px hsl(var(--primary)/0.12)" } : undefined}
-              data-testid={`plan-card-${plan.id}`}
-            >
-              {plan.popular && (
-                <motion.div
-                  initial={{ scale: 0.7, opacity: 0 }}
-                  animate={{ scale: 1, opacity: 1 }}
-                  transition={{ delay: i * 0.07 + 0.2, type: "spring", stiffness: 400, damping: 20 }}
-                  className="absolute -top-2.5 left-1/2 -translate-x-1/2 z-10"
-                >
-                  <span className="inline-flex items-center gap-1 bg-primary text-primary-foreground text-[10px] font-bold px-2.5 py-0.5 rounded-full shadow-md shadow-primary/40">
-                    <Star className="w-2.5 h-2.5 fill-current" />
-                    Popular
-                  </span>
-                </motion.div>
-              )}
+          {plans.map((plan, i) => {
+            const accent = plan.accentColor; // null → use primary
+            const isPopular = plan.popular === 1;
+            const isNewBadge = plan.isNew === 1;
+            const isClaude = plan.service === "claude";
+            const price = (plan.priceCents / 100).toFixed(2);
+            const priceColor = accent ? `color: ${accent}` : isPopular ? undefined : undefined;
 
-              <div className="flex items-center gap-1.5 mb-3 mt-1">
-                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-muted/70 border border-border text-[10px] font-semibold text-muted-foreground">
-                  <Clock className="w-2.5 h-2.5" />
-                  {plan.duration}
-                </span>
-              </div>
-
-              <h3 className="text-xs font-bold text-foreground leading-tight mb-3">{plan.name}</h3>
-
-              <div className="mb-3">
-                <span className={`text-[1.6rem] font-black leading-none ${plan.popular ? "text-primary" : "text-foreground"}`}>
-                  ${plan.price.toFixed(2)}
-                </span>
-                <span className="text-[10px] text-muted-foreground ml-1">USDT</span>
-              </div>
-
-              <div className="flex items-center gap-1 text-[10px] text-muted-foreground mb-3 mt-auto">
-                <Zap className="w-3 h-3 text-primary shrink-0" />
-                <span>Automatic delivery</span>
-              </div>
-
-              <motion.button
-                whileTap={{ scale: 0.96 }}
-                onClick={() => setOrderPlan(plan)}
-                data-testid={`button-get-now-${plan.id}`}
-                className={`w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold transition-colors duration-150 ${
-                  plan.popular
-                    ? "bg-primary text-primary-foreground hover:bg-primary/90"
-                    : "bg-transparent border border-border text-foreground hover:border-primary/60 hover:bg-primary/5"
+            return (
+              <motion.div
+                key={plan.id}
+                initial={{ opacity: 0, y: 24 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.35, delay: i * 0.07, ease: "easeOut" }}
+                whileHover={{ y: -3, transition: { duration: 0.18 } }}
+                className={`relative rounded-xl border p-3.5 flex flex-col cursor-pointer ${
+                  isPopular
+                    ? "border-primary/70 bg-primary/5"
+                    : accent
+                    ? "bg-card"
+                    : "border-border bg-card"
                 }`}
+                style={{
+                  ...(isPopular ? { boxShadow: "0 0 0 1px hsl(var(--primary)/0.3), 0 8px 24px hsl(var(--primary)/0.12)", borderColor: "hsl(var(--primary)/0.7)" } : {}),
+                  ...(accent && !isPopular ? { borderColor: `${accent}50`, boxShadow: `0 0 0 1px ${accent}22` } : {}),
+                }}
+                data-testid={`plan-card-${plan.planKey}`}
               >
-                Get Now <ArrowRight className="w-3 h-3" />
-              </motion.button>
-            </motion.div>
-          ))}
+                {/* Badge: Popular or New */}
+                {(isPopular || isNewBadge) && (
+                  <motion.div
+                    initial={{ scale: 0.7, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    transition={{ delay: i * 0.07 + 0.2, type: "spring", stiffness: 400, damping: 20 }}
+                    className="absolute -top-2.5 left-1/2 -translate-x-1/2 z-10"
+                  >
+                    {isPopular ? (
+                      <span className="inline-flex items-center gap-1 bg-primary text-primary-foreground text-[10px] font-bold px-2.5 py-0.5 rounded-full shadow-md shadow-primary/40">
+                        <Star className="w-2.5 h-2.5 fill-current" />
+                        Popular
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-white text-[10px] font-bold px-2.5 py-0.5 rounded-full shadow-md" style={{ backgroundColor: accent ?? "hsl(var(--primary))" }}>
+                        <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                        New
+                      </span>
+                    )}
+                  </motion.div>
+                )}
 
-          {/* Claude Pro card */}
-          <motion.div
-            initial={{ opacity: 0, y: 24 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.35, delay: PLANS.length * 0.07, ease: "easeOut" }}
-            whileHover={{ y: -3, transition: { duration: 0.18 } }}
-            className="relative rounded-xl border border-[#D97757]/50 bg-[#D97757]/5 p-3.5 flex flex-col cursor-pointer"
-            style={{ boxShadow: "0 0 0 1px rgb(217 119 87 / 0.2)" }}
-            data-testid="plan-card-claude"
-          >
-            <motion.div
-              initial={{ scale: 0.7, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ delay: PLANS.length * 0.07 + 0.2, type: "spring", stiffness: 400, damping: 20 }}
-              className="absolute -top-2.5 left-1/2 -translate-x-1/2 z-10"
-            >
-              <span className="inline-flex items-center gap-1 bg-[#D97757] text-white text-[10px] font-bold px-2.5 py-0.5 rounded-full shadow-md">
-                <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
-                New
-              </span>
-            </motion.div>
+                {/* Duration row */}
+                <div className="flex items-center gap-1.5 mb-3 mt-1">
+                  {isClaude && <img src={claudeLogoPath} alt="Claude" className="w-4 h-4 rounded shrink-0" />}
+                  <span
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold border"
+                    style={accent
+                      ? { backgroundColor: `${accent}18`, borderColor: `${accent}30`, color: accent }
+                      : { backgroundColor: "hsl(var(--muted)/0.7)", borderColor: "hsl(var(--border))", color: "hsl(var(--muted-foreground))" }
+                    }
+                  >
+                    <Clock className="w-2.5 h-2.5" />
+                    {plan.duration}
+                  </span>
+                </div>
 
-            <div className="flex items-center gap-1.5 mb-3 mt-1">
-              <img src={claudeLogoPath} alt="Claude" className="w-4 h-4 rounded shrink-0" />
-              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-[#D97757]/10 border border-[#D97757]/25 text-[10px] font-semibold text-[#D97757]">
-                <Clock className="w-2.5 h-2.5" />
-                Weekly
-              </span>
-            </div>
+                <h3 className="text-xs font-bold text-foreground leading-tight mb-3">{plan.name}</h3>
 
-            <h3 className="text-xs font-bold text-foreground leading-tight mb-3">Claude Pro</h3>
+                <div className="mb-3">
+                  <span
+                    className="text-[1.6rem] font-black leading-none"
+                    style={{ color: accent ?? (isPopular ? "hsl(var(--primary))" : "hsl(var(--foreground))") }}
+                  >
+                    ${price}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground ml-1">USDT</span>
+                </div>
 
-            <div className="mb-3">
-              <span className="text-[1.6rem] font-black leading-none text-[#D97757]">$2.30</span>
-              <span className="text-[10px] text-muted-foreground ml-1">USDT</span>
-            </div>
+                <div className="flex items-center gap-1 text-[10px] text-muted-foreground mb-3 mt-auto">
+                  {plan.action === "whatsapp"
+                    ? <MessageCircle className="w-3 h-3 shrink-0" style={{ color: accent ?? "hsl(var(--primary))" }} />
+                    : <Zap className="w-3 h-3 text-primary shrink-0" />
+                  }
+                  <span>{plan.deliveryNote}</span>
+                </div>
 
-            <div className="flex items-center gap-1 text-[10px] text-muted-foreground mb-3 mt-auto">
-              <MessageCircle className="w-3 h-3 text-[#D97757] shrink-0" />
-              <span>Via WhatsApp</span>
-            </div>
-
-            <motion.button
-              whileTap={{ scale: 0.96 }}
-              className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold bg-[#D97757] hover:bg-[#c9673f] text-white transition-colors duration-150"
-              onClick={() => setShowClaude(true)}
-              data-testid="button-get-now-claude"
-            >
-              Get Now <ArrowRight className="w-3 h-3" />
-            </motion.button>
-          </motion.div>
+                <motion.button
+                  whileTap={{ scale: 0.96 }}
+                  onClick={() => {
+                    if (plan.action === "whatsapp") setShowClaude(true);
+                    else setOrderPlan(toDialogPlan(plan));
+                  }}
+                  data-testid={`button-get-now-${plan.planKey}`}
+                  className={`w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold transition-colors duration-150 ${
+                    accent
+                      ? "text-white"
+                      : isPopular
+                      ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                      : "bg-transparent border border-border text-foreground hover:border-primary/60 hover:bg-primary/5"
+                  }`}
+                  style={accent ? { backgroundColor: accent } : undefined}
+                >
+                  Get Now <ArrowRight className="w-3 h-3" />
+                </motion.button>
+              </motion.div>
+            );
+          })}
         </div>
       </section>
 

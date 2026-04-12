@@ -90,6 +90,27 @@ export const customVouchers = pgTable("custom_vouchers", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
+// ── Main Plans (admin-editable shop plans, replaces hardcoded PLANS array) ───
+export const mainPlans = pgTable("main_plans", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  duration: text("duration").notNull(),         // "1M", "1Y", "Weekly"
+  durationLabel: text("duration_label").notNull(),
+  priceCents: integer("price_cents").notNull(),
+  popular: integer("popular").notNull().default(0),
+  isNew: integer("is_new").notNull().default(0),
+  service: text("service").notNull().default("chatgpt"), // "chatgpt" | "claude"
+  accentColor: text("accent_color"),            // null = use primary; "#D97757" for claude
+  deliveryNote: text("delivery_note").notNull().default("Automatic delivery"),
+  action: text("action").notNull().default("order"), // "order" | "whatsapp"
+  planKey: text("plan_key").notNull(),          // maps to inventory plan slug
+  active: integer("active").notNull().default(1),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export type MainPlan = typeof mainPlans.$inferSelect;
+
 // ── API Keys (user-generated for public API access) ──────────────────────────
 export const apiKeys = pgTable("api_keys", {
   id: serial("id").primaryKey(),

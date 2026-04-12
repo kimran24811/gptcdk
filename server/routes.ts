@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import bcrypt from "bcrypt";
 import { eq, desc, and, ne, sql, inArray, lt } from "drizzle-orm";
 import { db } from "./storage";
-import { users, transactions, orders, depositRequests, inventoryKeys, customProducts, customVouchers, announcementConfig, apiKeys } from "@shared/schema";
+import { users, transactions, orders, depositRequests, inventoryKeys, customProducts, customVouchers, announcementConfig, apiKeys, mainPlans } from "@shared/schema";
 import crypto from "crypto";
 import { sendWhatsAppMessage, getRawQR, getConnectionStatus, setMessageHandler } from "./whatsapp";
 
@@ -663,8 +663,49 @@ async function requireApiKey(req: Request, res: Response, next: NextFunction) {
   }
 }
 
+const DEFAULT_MAIN_PLANS = [
+  { name: "ChatGPT Plus CDK", duration: "1M", durationLabel: "1 month",  priceCents: 238,   popular: 0, isNew: 0, service: "chatgpt", accentColor: null, deliveryNote: "Automatic delivery", action: "order",    planKey: "plus-1m", sortOrder: 1 },
+  { name: "ChatGPT Plus CDK", duration: "1Y", durationLabel: "1 year",   priceCents: 2800,  popular: 1, isNew: 0, service: "chatgpt", accentColor: null, deliveryNote: "Automatic delivery", action: "order",    planKey: "plus-1y", sortOrder: 2 },
+  { name: "ChatGPT GO CDK",   duration: "1Y", durationLabel: "1 year",   priceCents: 500,   popular: 0, isNew: 0, service: "chatgpt", accentColor: null, deliveryNote: "Automatic delivery", action: "order",    planKey: "go-1y",   sortOrder: 3 },
+  { name: "ChatGPT Pro CDK",  duration: "1M", durationLabel: "1 month",  priceCents: 11000, popular: 0, isNew: 0, service: "chatgpt", accentColor: null, deliveryNote: "Automatic delivery", action: "order",    planKey: "pro-1m",  sortOrder: 4 },
+  { name: "Claude Pro",       duration: "Weekly", durationLabel: "Weekly", priceCents: 230, popular: 0, isNew: 1, service: "claude",  accentColor: "#D97757", deliveryNote: "Via WhatsApp",   action: "whatsapp", planKey: "claude-weekly", sortOrder: 5 },
+];
+
+async function seedMainPlans() {
+  try {
+    // Create table if it doesn't exist (safe to run on every boot)
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS main_plans (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        duration TEXT NOT NULL,
+        duration_label TEXT NOT NULL,
+        price_cents INTEGER NOT NULL,
+        popular INTEGER NOT NULL DEFAULT 0,
+        is_new INTEGER NOT NULL DEFAULT 0,
+        service TEXT NOT NULL DEFAULT 'chatgpt',
+        accent_color TEXT,
+        delivery_note TEXT NOT NULL DEFAULT 'Automatic delivery',
+        action TEXT NOT NULL DEFAULT 'order',
+        plan_key TEXT NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `);
+    const existing = await db.select({ id: mainPlans.id }).from(mainPlans).limit(1);
+    if (existing.length === 0) {
+      await db.insert(mainPlans).values(DEFAULT_MAIN_PLANS.map(p => ({ ...p, active: 1 })));
+      console.log("[seed] Main plans seeded.");
+    }
+  } catch (err) {
+    console.error("[seed] mainPlans error:", err);
+  }
+}
+
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
   await seedAdmin();
+  await seedMainPlans();
   // Warm pricing cache on startup (non-blocking — purchase falls back to live fetch if cache is cold)
   warmPricingCache().catch(() => {});
 
@@ -2144,6 +2185,90 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (err) {
       console.error("Announcement update error:", err);
       return res.status(500).json({ success: false, message: "Could not update popup." });
+    }
+  });
+
+  // ── Main Plans (admin-editable) ───────────────────────────────────────────────
+
+  app.get("/api/main-plans", async (_req, res) => {
+    try {
+      const plans = await db.select().from(mainPlans)
+        .where(eq(mainPlans.active, 1))
+        .orderBy(mainPlans.sortOrder, mainPlans.id);
+      return res.json({ success: true, data: plans });
+    } catch (err) {
+      console.error("main-plans fetch error:", err);
+      return res.status(500).json({ success: false, message: "Could not fetch plans." });
+    }
+  });
+
+  app.get("/api/admin/main-plans", requireAdmin, async (_req, res) => {
+    try {
+      const plans = await db.select().from(mainPlans).orderBy(mainPlans.sortOrder, mainPlans.id);
+      return res.json({ success: true, data: plans });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: "Error fetching plans." });
+    }
+  });
+
+  app.post("/api/admin/main-plans", requireAdmin, async (req, res) => {
+    try {
+      const { name, duration, durationLabel, priceCents, popular, isNew, service, accentColor, deliveryNote, action, planKey, sortOrder } = req.body;
+      if (!name || !duration || !durationLabel || !priceCents || !planKey) {
+        return res.status(400).json({ success: false, message: "Missing required fields." });
+      }
+      const [plan] = await db.insert(mainPlans).values({
+        name, duration, durationLabel,
+        priceCents: parseInt(priceCents),
+        popular: popular ? 1 : 0,
+        isNew: isNew ? 1 : 0,
+        service: service || "chatgpt",
+        accentColor: accentColor || null,
+        deliveryNote: deliveryNote || "Automatic delivery",
+        action: action || "order",
+        planKey,
+        active: 1,
+        sortOrder: parseInt(sortOrder ?? "0") || 0,
+      }).returning();
+      return res.json({ success: true, data: plan });
+    } catch (err) {
+      console.error("main-plans create error:", err);
+      return res.status(500).json({ success: false, message: "Error creating plan." });
+    }
+  });
+
+  app.patch("/api/admin/main-plans/:id", requireAdmin, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const { name, duration, durationLabel, priceCents, popular, isNew, service, accentColor, deliveryNote, action, planKey, active, sortOrder } = req.body;
+      const updates: Record<string, unknown> = {};
+      if (name !== undefined) updates.name = name;
+      if (duration !== undefined) updates.duration = duration;
+      if (durationLabel !== undefined) updates.durationLabel = durationLabel;
+      if (priceCents !== undefined) updates.priceCents = parseInt(priceCents);
+      if (popular !== undefined) updates.popular = popular ? 1 : 0;
+      if (isNew !== undefined) updates.isNew = isNew ? 1 : 0;
+      if (service !== undefined) updates.service = service;
+      if (accentColor !== undefined) updates.accentColor = accentColor || null;
+      if (deliveryNote !== undefined) updates.deliveryNote = deliveryNote;
+      if (action !== undefined) updates.action = action;
+      if (planKey !== undefined) updates.planKey = planKey;
+      if (active !== undefined) updates.active = active ? 1 : 0;
+      if (sortOrder !== undefined) updates.sortOrder = parseInt(sortOrder) || 0;
+      await db.update(mainPlans).set(updates).where(eq(mainPlans.id, id));
+      return res.json({ success: true });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: "Error updating plan." });
+    }
+  });
+
+  app.delete("/api/admin/main-plans/:id", requireAdmin, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      await db.delete(mainPlans).where(eq(mainPlans.id, id));
+      return res.json({ success: true });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: "Error deleting plan." });
     }
   });
 

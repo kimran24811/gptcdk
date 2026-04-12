@@ -1604,6 +1604,232 @@ function AdminApiKeysTab() {
   );
 }
 
+// ── Main Plans tab ───────────────────────────────────────────────────────────
+interface AdminMainPlan {
+  id: number;
+  planKey: string;
+  name: string;
+  duration: string;
+  durationLabel: string;
+  priceCents: number;
+  popular: number;
+  isNew: number;
+  service: string;
+  accentColor: string | null;
+  deliveryNote: string;
+  action: string;
+  active: number;
+  sortOrder: number;
+}
+
+function EditPlanDialog({ plan, onClose, onSaved }: { plan: AdminMainPlan | null; onClose: () => void; onSaved: () => void }) {
+  const { toast } = useToast();
+  const isEdit = !!plan;
+  const [name, setName] = useState(plan?.name ?? "");
+  const [duration, setDuration] = useState(plan?.duration ?? "1M");
+  const [durationLabel, setDurationLabel] = useState(plan?.durationLabel ?? "1 month");
+  const [price, setPrice] = useState(plan ? (plan.priceCents / 100).toFixed(2) : "");
+  const [popular, setPopular] = useState(plan?.popular === 1);
+  const [isNew, setIsNew] = useState(plan?.isNew === 1);
+  const [service, setService] = useState(plan?.service ?? "chatgpt");
+  const [accentColor, setAccentColor] = useState(plan?.accentColor ?? "");
+  const [deliveryNote, setDeliveryNote] = useState(plan?.deliveryNote ?? "Automatic delivery");
+  const [action, setAction] = useState(plan?.action ?? "order");
+  const [planKey, setPlanKey] = useState(plan?.planKey ?? "");
+  const [sortOrder, setSortOrder] = useState(String(plan?.sortOrder ?? "0"));
+
+  const save = useMutation({
+    mutationFn: async () => {
+      const body = {
+        name, duration, durationLabel,
+        priceCents: Math.round(parseFloat(price) * 100),
+        popular, isNew, service,
+        accentColor: accentColor || null,
+        deliveryNote, action, planKey,
+        sortOrder: parseInt(sortOrder) || 0,
+        active: 1,
+      };
+      if (isEdit) {
+        const res = await apiRequest("PATCH", `/api/admin/main-plans/${plan!.id}`, body);
+        return res.json();
+      } else {
+        const res = await apiRequest("POST", "/api/admin/main-plans", body);
+        return res.json();
+      }
+    },
+    onSuccess: (data) => {
+      if (data.success) {
+        toast({ title: isEdit ? "Plan updated" : "Plan created" });
+        onSaved();
+        onClose();
+      } else {
+        toast({ title: "Error", description: data.message, variant: "destructive" });
+      }
+    },
+    onError: () => toast({ title: "Error", variant: "destructive" }),
+  });
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{isEdit ? "Edit Plan" : "Add Plan"}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 pt-1">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Name</label>
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="ChatGPT Plus CDK" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Plan Key (slug)</label>
+              <Input value={planKey} onChange={(e) => setPlanKey(e.target.value)} placeholder="plus-1m" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Duration Badge</label>
+              <Input value={duration} onChange={(e) => setDuration(e.target.value)} placeholder="1M" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Duration Label</label>
+              <Input value={durationLabel} onChange={(e) => setDurationLabel(e.target.value)} placeholder="1 month" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Price (USDT)</label>
+              <Input type="number" step="0.01" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="2.38" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Sort Order</label>
+              <Input type="number" value={sortOrder} onChange={(e) => setSortOrder(e.target.value)} placeholder="1" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Service</label>
+              <select value={service} onChange={(e) => setService(e.target.value)} className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm">
+                <option value="chatgpt">ChatGPT</option>
+                <option value="claude">Claude</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Action</label>
+              <select value={action} onChange={(e) => setAction(e.target.value)} className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm">
+                <option value="order">Order (auto)</option>
+                <option value="whatsapp">WhatsApp</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground mb-1 block">Delivery Note</label>
+            <Input value={deliveryNote} onChange={(e) => setDeliveryNote(e.target.value)} placeholder="Automatic delivery" />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-muted-foreground mb-1 block">Accent Color (leave blank for default green)</label>
+            <Input value={accentColor} onChange={(e) => setAccentColor(e.target.value)} placeholder="#D97757" />
+          </div>
+          <div className="flex items-center gap-4">
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input type="checkbox" checked={popular} onChange={(e) => setPopular(e.target.checked)} className="w-4 h-4" />
+              Popular badge
+            </label>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input type="checkbox" checked={isNew} onChange={(e) => setIsNew(e.target.checked)} className="w-4 h-4" />
+              New badge
+            </label>
+          </div>
+          <Button className="w-full" onClick={() => save.mutate()} disabled={save.isPending || !name || !planKey || !price}>
+            {save.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : isEdit ? "Save Changes" : "Add Plan"}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function MainPlansTab() {
+  const { toast } = useToast();
+  const [editing, setEditing] = useState<AdminMainPlan | null | "new">(null);
+
+  const { data, refetch } = useQuery<{ success: boolean; data: AdminMainPlan[] }>({
+    queryKey: ["/api/admin/main-plans"],
+    queryFn: async () => { const res = await fetch("/api/admin/main-plans", { credentials: "include" }); return res.json(); },
+  });
+  const plans = data?.data ?? [];
+
+  const toggleActive = useMutation({
+    mutationFn: async ({ id, active }: { id: number; active: boolean }) => {
+      const res = await apiRequest("PATCH", `/api/admin/main-plans/${id}`, { active });
+      return res.json();
+    },
+    onSuccess: () => { refetch(); queryClient.invalidateQueries({ queryKey: ["/api/main-plans"] }); },
+  });
+
+  const deletePlan = useMutation({
+    mutationFn: async (id: number) => {
+      const res = await apiRequest("DELETE", `/api/admin/main-plans/${id}`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Plan deleted" });
+      refetch();
+      queryClient.invalidateQueries({ queryKey: ["/api/main-plans"] });
+    },
+  });
+
+  return (
+    <div>
+      {editing && (
+        <EditPlanDialog
+          plan={editing === "new" ? null : editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => { refetch(); queryClient.invalidateQueries({ queryKey: ["/api/main-plans"] }); }}
+        />
+      )}
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-sm font-semibold text-foreground">Shop Plans</h3>
+        <Button size="sm" onClick={() => setEditing("new")} className="gap-1.5">
+          <Plus className="w-3.5 h-3.5" /> Add Plan
+        </Button>
+      </div>
+      <p className="text-xs text-muted-foreground mb-4">These are the main plans shown on the shop page. Edit price, name, duration, or hide/show any plan.</p>
+      <div className="space-y-2">
+        {plans.map((p) => (
+          <div key={p.id} className="flex items-center gap-3 p-3 rounded-lg border border-border bg-card">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm font-semibold text-foreground">{p.name}</span>
+                <span className="text-xs text-muted-foreground">· {p.duration}</span>
+                <span className="text-xs font-bold text-primary">${(p.priceCents / 100).toFixed(2)} USDT</span>
+                {p.popular === 1 && <span className="text-[10px] bg-primary/10 text-primary px-1.5 py-0.5 rounded-full font-semibold">Popular</span>}
+                {p.isNew === 1 && <span className="text-[10px] bg-orange-500/10 text-orange-500 px-1.5 py-0.5 rounded-full font-semibold">New</span>}
+                {p.active === 0 && <span className="text-[10px] bg-muted text-muted-foreground px-1.5 py-0.5 rounded-full">Hidden</span>}
+              </div>
+              <p className="text-xs text-muted-foreground mt-0.5">{p.deliveryNote} · key: {p.planKey}</p>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <Button size="sm" variant="ghost" onClick={() => toggleActive.mutate({ id: p.id, active: p.active === 0 })} className="text-xs h-7 px-2">
+                {p.active === 1 ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setEditing(p)} className="h-7 px-2">
+                <Pencil className="w-3.5 h-3.5" />
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => deletePlan.mutate(p.id)} className="h-7 px-2 text-destructive hover:text-destructive">
+                <Trash2 className="w-3.5 h-3.5" />
+              </Button>
+            </div>
+          </div>
+        ))}
+        {plans.length === 0 && (
+          <div className="text-center py-8 text-muted-foreground text-sm">No plans yet — restart the server to auto-seed defaults, or add one manually.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Products tab ─────────────────────────────────────────────────────────────
 function ProductsTab() {
   const { toast } = useToast();
@@ -1790,7 +2016,7 @@ function WhatsAppBotTab() {
 export default function AdminPage() {
   const [, navigate] = useLocation();
   const { user, isAdmin, isLoading } = useAuth();
-  const [tab, setTab] = useState<"customers" | "orders" | "deposits" | "inventory" | "products" | "api-keys" | "whatsapp" | "settings">("customers");
+  const [tab, setTab] = useState<"customers" | "orders" | "deposits" | "inventory" | "products" | "plans" | "api-keys" | "whatsapp" | "settings">("customers");
   const [balanceTarget, setBalanceTarget] = useState<{ customer: Customer; mode: "credit" | "debit" } | null>(null);
   const [ordersTarget, setOrdersTarget] = useState<Customer | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Customer | null>(null);
@@ -1880,7 +2106,7 @@ export default function AdminPage() {
 
       {/* Tabs */}
       <div className="flex gap-1 mb-5 border-b border-border overflow-x-auto">
-        {(["customers", "orders", "deposits", "inventory", "products", "api-keys", "whatsapp", "settings"] as const).map((t) => (
+        {(["customers", "orders", "deposits", "inventory", "products", "plans", "api-keys", "whatsapp", "settings"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -1893,7 +2119,7 @@ export default function AdminPage() {
             {t === "deposits" && <ArrowDownToLine className="w-3.5 h-3.5" />}
             {t === "inventory" && <Key className="w-3.5 h-3.5" />}
             {t === "api-keys" && <Key className="w-3.5 h-3.5" />}
-            {t === "deposits" ? "Deposits" : t === "settings" ? "Settings" : t === "inventory" ? "Keys" : t === "api-keys" ? "API Keys" : t === "whatsapp" ? "WhatsApp Bot" : t.charAt(0).toUpperCase() + t.slice(1)}
+            {t === "deposits" ? "Deposits" : t === "settings" ? "Settings" : t === "inventory" ? "Keys" : t === "api-keys" ? "API Keys" : t === "whatsapp" ? "WhatsApp Bot" : t === "plans" ? "Plans" : t.charAt(0).toUpperCase() + t.slice(1)}
           </button>
         ))}
       </div>
@@ -2042,6 +2268,9 @@ export default function AdminPage() {
 
       {/* Products tab */}
       {tab === "products" && <ProductsTab />}
+
+      {/* Plans tab */}
+      {tab === "plans" && <MainPlansTab />}
 
       {/* API Keys tab */}
       {tab === "api-keys" && <AdminApiKeysTab />}
