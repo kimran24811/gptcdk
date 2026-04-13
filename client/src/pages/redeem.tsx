@@ -279,23 +279,27 @@ export default function RedeemPage() {
   });
 
   // ── Suppy: poll activation status ────────────────────────────────────────
+  // Attempt 0-14: 2s apart (~30s total) — silent progress bar
+  // Attempt 15+: 4s apart — amber "taking longer" box visible, polling continues
+  // Attempt 60: give up entirely (total ~3.5 min)
   async function pollSuppy(code: string, attempt: number) {
     setSuppyPollCount(attempt + 1);
-    if (attempt >= 40) {
-      // Polling timed out — activation was submitted but provider is slow.
-      // Do NOT show a red error. Show amber "still activating" + Re-check button.
+    if (attempt >= 60) {
       setSuppyPolling(false);
       setSuppyTimedOut(true);
       return;
     }
+    // After 30s (attempt 15) show the amber box — but keep polling
+    if (attempt === 15) setSuppyTimedOut(true);
+
     try {
       const res = await fetch(`/api/suppy-recheck/${encodeURIComponent(code)}`, { credentials: "include" });
       const data = await res.json();
       if (data.pending === false) {
         setSuppyPolling(false);
+        setSuppyTimedOut(false);
         if (data.success) {
           setActivationResult({ email: data.email, subscription: data.activationType });
-          setSuppyTimedOut(false);
           setStep(3);
         } else {
           setSuppyFailed(data.message || "Activation failed. Please try again.");
@@ -303,8 +307,7 @@ export default function RedeemPage() {
         return;
       }
     } catch { /* swallow, retry */ }
-    // Poll quickly at first (catches instant activations), then slow down
-    const delay = attempt < 5 ? 2000 : 4000;
+    const delay = attempt < 15 ? 2000 : 4000;
     suppyPollerRef.current = setTimeout(() => pollSuppy(code, attempt + 1), delay);
   }
 
@@ -741,28 +744,34 @@ export default function RedeemPage() {
                 </div>
               )}
 
-              {/* Suppy timed out — amber "still activating", NOT a red failure */}
-              {suppyTimedOut && !suppyPolling && (
+              {/* Taking longer than 30s — amber notice, polling still running in background */}
+              {suppyTimedOut && (
                 <div className="rounded-xl border border-amber-500/30 bg-amber-500/8 p-4 space-y-3">
                   <div className="flex items-start gap-3">
                     <Clock className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
                     <div>
-                      <p className="text-sm font-semibold text-amber-600 dark:text-amber-400">Activation is in progress</p>
+                      <p className="text-sm font-semibold text-amber-600 dark:text-amber-400">
+                        {suppyPolling ? "Still activating — checking automatically…" : "Activation is taking longer than expected"}
+                      </p>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        Your subscription request was submitted. The provider is still processing it — this can take a few minutes.
-                        Open ChatGPT and refresh the page; your Plus subscription may already be active.
+                        {suppyPolling
+                          ? "You'll be notified the moment it's confirmed. You can also open ChatGPT and check your subscription status directly."
+                          : "Your request was submitted. Open ChatGPT and refresh — your Plus subscription may already be active."}
                       </p>
                     </div>
                   </div>
-                  <button
-                    onClick={recheckSuppy}
-                    disabled={suppyRecheckLoading}
-                    className="w-full flex items-center justify-center gap-2 py-2 rounded-lg bg-amber-500 hover:bg-amber-600 disabled:opacity-60 text-white text-sm font-semibold transition-colors"
-                    data-testid="button-recheck-suppy"
-                  >
-                    {suppyRecheckLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                    {suppyRecheckLoading ? "Checking…" : "Re-check activation status"}
-                  </button>
+                  {/* Manual re-check only when auto-polling has stopped */}
+                  {!suppyPolling && (
+                    <button
+                      onClick={recheckSuppy}
+                      disabled={suppyRecheckLoading}
+                      className="w-full flex items-center justify-center gap-2 py-2 rounded-lg bg-amber-500 hover:bg-amber-600 disabled:opacity-60 text-white text-sm font-semibold transition-colors"
+                      data-testid="button-recheck-suppy"
+                    >
+                      {suppyRecheckLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                      {suppyRecheckLoading ? "Checking…" : "Re-check activation status"}
+                    </button>
+                  )}
                 </div>
               )}
 
