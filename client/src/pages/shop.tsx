@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Zap, Shield, Clock, CheckCircle, Minus, Plus, Copy, Check, Loader2, LogIn, Headphones, ArrowRight, Star, Package, MessageCircle, Store } from "lucide-react";
+import { Zap, Shield, Clock, CheckCircle, Minus, Plus, Copy, Check, Loader2, LogIn, Headphones, ArrowRight, Star, Package, MessageCircle, Store, Download } from "lucide-react";
 import claudeLogoPath from "@assets/image_1774465922033.png";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -128,6 +128,27 @@ interface PurchaseResult {
 }
 
 function DeliveryDialog({ result, onClose }: { result: PurchaseResult | null; onClose: () => void }) {
+  const [allCopied, setAllCopied] = useState(false);
+
+  const copyAll = () => {
+    if (!result) return;
+    navigator.clipboard.writeText(result.keys.join("\n")).then(() => {
+      setAllCopied(true);
+      setTimeout(() => setAllCopied(false), 2000);
+    });
+  };
+
+  const downloadTxt = () => {
+    if (!result) return;
+    const blob = new Blob([result.keys.join("\n")], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `order-${result.orderNumber}-keys.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <Dialog open={!!result} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="sm:max-w-md max-h-[85vh] flex flex-col">
@@ -145,6 +166,31 @@ function DeliveryDialog({ result, onClose }: { result: PurchaseResult | null; on
               )}
             </div>
           </div>
+          {/* Bulk action buttons */}
+          {result && result.keys.length > 1 && (
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={copyAll}
+                className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg border text-xs font-semibold transition-all ${
+                  allCopied
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-border bg-muted/40 text-foreground hover:bg-muted"
+                }`}
+                data-testid="button-copy-all-keys"
+              >
+                {allCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                {allCopied ? "Copied!" : `Copy All (${result.keys.length})`}
+              </button>
+              <button
+                onClick={downloadTxt}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg border border-border bg-muted/40 text-foreground hover:bg-muted text-xs font-semibold transition-all"
+                data-testid="button-download-keys"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Download .txt
+              </button>
+            </div>
+          )}
         </DialogHeader>
         <div className="overflow-y-auto flex-1 space-y-2 pr-0.5">
           {result?.keys.map((key, idx) => (
