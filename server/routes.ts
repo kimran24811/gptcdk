@@ -2010,6 +2010,43 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  /**
+   * Definitive re-check: looks at BOTH the activation-status endpoint AND the
+   * key's actual status.  If the key is already "activated" on Suppy's side,
+   * we report success even when the activation-status endpoint still says
+   * "started" (Suppy sometimes never updates that endpoint after delivery).
+   */
+  app.get("/api/suppy-recheck/:code", async (req, res) => {
+    const { code } = req.params;
+    try {
+      // 1. Check activation-status first (fastest confirmation)
+      const statusRes = await suppyFetch("GET", `/chatgpt/keys/activation-status/${encodeURIComponent(code)}`);
+      if (statusRes.ok && statusRes.data && typeof statusRes.data === "object") {
+        const d = statusRes.data;
+        const s = typeof d.status === "string" ? d.status.toLowerCase() : "";
+        if (s === "subscription_sent") {
+          return res.json({ pending: false, success: true, email: d.key?.activated_email ?? null, activationType: d.activation_type });
+        }
+        if (s === "error") {
+          return res.json({ pending: false, success: false, message: d.message || "Activation failed on provider side." });
+        }
+      }
+
+      // 2. Fall back to checking the key's actual status
+      const keyInfo = await suppyCheckKey(code);
+      if (keyInfo?.found && keyInfo.status === "activated") {
+        console.log(`[suppy-recheck] Key ${code.slice(0, 8)}… is activated in key status even though activation-status is pending`);
+        return res.json({ pending: false, success: true, email: keyInfo.activatedEmail ?? null, activationType: null });
+      }
+
+      // Still not confirmed — still pending
+      return res.json({ pending: true, status: "started" });
+    } catch (err) {
+      console.error("[suppy-recheck] error:", err);
+      return res.json({ pending: true, status: "started" });
+    }
+  });
+
   // ── Nitro Auto-Activate (receipt-api.nitro.xin) ──────────────────────────
   app.post("/api/activate-nitro", async (req, res) => {
     const { cdkKey, sessionData } = req.body;

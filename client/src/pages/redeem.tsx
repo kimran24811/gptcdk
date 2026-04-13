@@ -139,6 +139,9 @@ export default function RedeemPage() {
   const [suppyPolling, setSuppyPolling] = useState(false);
   const [suppyPollCount, setSuppyPollCount] = useState(0);
   const [suppyFailed, setSuppyFailed] = useState<string | null>(null);
+  const [suppyTimedOut, setSuppyTimedOut] = useState(false); // true = polling timed out but may still succeed
+  const [suppyRecheckLoading, setSuppyRecheckLoading] = useState(false);
+  const [suppyCode, setSuppyCode] = useState<string | null>(null);
   const suppyPollerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Nitro mode ────────────────────────────────────────────────────────────
@@ -194,6 +197,8 @@ export default function RedeemPage() {
     setSuppyPolling(false);
     setSuppyPollCount(0);
     setSuppyFailed(null);
+    setSuppyTimedOut(false);
+    setSuppyCode(null);
     if (suppyPollerRef.current) clearTimeout(suppyPollerRef.current);
     // nitro
     setNitroSession("");
@@ -259,8 +264,10 @@ export default function RedeemPage() {
         // Suppy async activation — start polling
         setSuppyPolling(true);
         setSuppyFailed(null);
+        setSuppyTimedOut(false);
         setSuppyPollCount(0);
-        pollSuppy(cdkKey.trim(), 0);
+        setSuppyCode(data.code ?? cdkKey.trim());
+        pollSuppy(data.code ?? cdkKey.trim(), 0);
       } else if (data.success) {
         setActivationResult({ email: data.email, product: data.product, subscription: data.subscription, activatedAt: data.activatedAt });
         setStep(3);
@@ -275,8 +282,10 @@ export default function RedeemPage() {
   async function pollSuppy(code: string, attempt: number) {
     setSuppyPollCount(attempt + 1);
     if (attempt >= 40) {
+      // Polling timed out — activation was submitted but provider is slow.
+      // Do NOT show a red error. Show amber "still activating" + Re-check button.
       setSuppyPolling(false);
-      setSuppyFailed("Activation is taking longer than expected. Please check your ChatGPT account in a few minutes — the subscription may already be active.");
+      setSuppyTimedOut(true);
       return;
     }
     try {
@@ -286,6 +295,7 @@ export default function RedeemPage() {
         setSuppyPolling(false);
         if (data.success) {
           setActivationResult({ email: data.email, subscription: data.activationType });
+          setSuppyTimedOut(false);
           setStep(3);
         } else {
           setSuppyFailed(data.message || "Activation failed. Please try again.");
@@ -294,6 +304,36 @@ export default function RedeemPage() {
       }
     } catch { /* swallow, retry */ }
     suppyPollerRef.current = setTimeout(() => pollSuppy(code, attempt + 1), 4000);
+  }
+
+  // ── Suppy: definitive re-check after timeout ──────────────────────────────
+  async function recheckSuppy() {
+    if (!suppyCode || suppyRecheckLoading) return;
+    setSuppyRecheckLoading(true);
+    try {
+      const res = await fetch(`/api/suppy-recheck/${encodeURIComponent(suppyCode)}`, { credentials: "include" });
+      const data = await res.json();
+      if (data.pending === false) {
+        if (data.success) {
+          setActivationResult({ email: data.email, subscription: data.activationType });
+          setSuppyTimedOut(false);
+          setSuppyFailed(null);
+          setStep(3);
+        } else {
+          setSuppyTimedOut(false);
+          setSuppyFailed(data.message || "Activation failed. Please try again.");
+        }
+      } else {
+        // Still not confirmed — tell user to check ChatGPT directly
+        setSuppyTimedOut(false);
+        setSuppyFailed("Not confirmed yet. Please open ChatGPT and check if your subscription is active — it may already be applied.");
+      }
+    } catch {
+      setSuppyFailed("Could not reach the server. Please try again.");
+      setSuppyTimedOut(false);
+    } finally {
+      setSuppyRecheckLoading(false);
+    }
   }
 
   // ── Team key activation (Suppy) ───────────────────────────────────────────
@@ -699,8 +739,33 @@ export default function RedeemPage() {
                 </div>
               )}
 
-              {/* Suppy failure message */}
-              {suppyFailed && !suppyPolling && (
+              {/* Suppy timed out — amber "still activating", NOT a red failure */}
+              {suppyTimedOut && !suppyPolling && (
+                <div className="rounded-xl border border-amber-500/30 bg-amber-500/8 p-4 space-y-3">
+                  <div className="flex items-start gap-3">
+                    <Clock className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-semibold text-amber-600 dark:text-amber-400">Activation is in progress</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Your subscription request was submitted. The provider is still processing it — this can take a few minutes.
+                        Open ChatGPT and refresh the page; your Plus subscription may already be active.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={recheckSuppy}
+                    disabled={suppyRecheckLoading}
+                    className="w-full flex items-center justify-center gap-2 py-2 rounded-lg bg-amber-500 hover:bg-amber-600 disabled:opacity-60 text-white text-sm font-semibold transition-colors"
+                    data-testid="button-recheck-suppy"
+                  >
+                    {suppyRecheckLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                    {suppyRecheckLoading ? "Checking…" : "Re-check activation status"}
+                  </button>
+                </div>
+              )}
+
+              {/* Hard failure (provider returned an error, not a timeout) */}
+              {suppyFailed && !suppyPolling && !suppyTimedOut && (
                 <div className="flex items-start gap-3 rounded-xl border border-destructive/30 bg-destructive/5 p-4">
                   <XCircle className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
                   <div>
