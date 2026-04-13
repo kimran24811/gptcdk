@@ -1953,10 +1953,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           return res.json({ success: false, message });
         }
 
-        // If Suppy says "ok" / "completed", activation is already done — skip polling
+        // If Suppy says "ok" / "completed", verify the key actually got activated
+        // (workspace/team accounts silently fail — Suppy returns "ok" but the key stays "Available")
         const suppyStatus = startRes.data?.status;
         if (suppyStatus === "ok" || suppyStatus === "completed") {
           console.log(`[activate/suppy] instant activation (status:${suppyStatus}) for key:`, cdkKey.trim().slice(0, 8) + "...");
+
+          // Give Suppy 2 seconds to update the key status, then verify
+          await new Promise(r => setTimeout(r, 2000));
+          const verify = await suppyCheckKey(cdkKey.trim(), suppyService);
+          console.log(`[activate/suppy] post-instant verify:`, JSON.stringify(verify));
+
+          if (!verify || verify.status === "Available") {
+            // Key is still available — activation was silently rejected (e.g. workspace account)
+            return res.json({
+              success: false,
+              message: suppyService === "claude"
+                ? "Activation failed. Make sure you are using a personal Claude.ai account, not a Claude for Work or Anthropic developer console account."
+                : "Activation failed. Make sure you are using a personal ChatGPT account, not a work or enterprise account.",
+            });
+          }
+
           return res.json({ success: true, activated: true, code: cdkKey.trim(), service: suppyService });
         }
 
