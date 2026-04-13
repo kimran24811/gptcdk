@@ -1897,26 +1897,43 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     // ── Route to Suppy for Suppy keys ─────────────────────────────────────────
     if (apiSource === "suppy") {
-      // Use service-specific endpoint: Claude keys use /claude/keys/, ChatGPT keys use /chatgpt/keys/
       const suppyService = service === "claude" ? "claude" : "chatgpt";
-      const activatePath = `/${suppyService}/keys/activate-session`;
       const platform = suppyService === "claude" ? "Claude" : "ChatGPT";
+
+      // Try the service-specific endpoint; if it returns 404 (endpoint doesn't exist
+      // for this key type), automatically fall back to /chatgpt/keys/activate-session.
+      const pathsToTry = suppyService === "claude"
+        ? ["/claude/keys/activate-session", "/chatgpt/keys/activate-session"]
+        : ["/chatgpt/keys/activate-session"];
+
+      const suppyErrMap: Record<string, string> = {
+        no_access_token: `No session key found. Please follow the instructions to copy your ${platform} session.`,
+        session_expired: "Your session has expired. Please get a fresh session token.",
+        session_invalid: "Invalid session. Please get a fresh session token.",
+        workspace_account: "Corporate/workspace accounts are not supported.",
+        "key already activated": "This key has already been activated.",
+        "key not found": "Key not found or not available.",
+      };
+
       try {
-        console.log(`[activate/suppy] service:${suppyService} key:`, cdkKey.trim().slice(0, 8) + "...");
-        const startRes = await suppyFetch("POST", activatePath, { code: cdkKey.trim(), session: rawSession });
-        if (!startRes.ok) {
-          const errText = typeof startRes.data === "string" ? startRes.data : startRes.data?.message || "Activation failed.";
-          const suppyErrMap: Record<string, string> = {
-            no_access_token: `No session key found. Please follow the instructions to copy your ${platform} session.`,
-            session_expired: "Your session has expired. Please get a fresh session token.",
-            session_invalid: "Invalid session. Please get a fresh session token.",
-            workspace_account: "Corporate/workspace accounts are not supported.",
-            "key already activated": "This key has already been activated.",
-            "key not found": "Key not found or not available.",
-          };
-          return res.json({ success: false, message: suppyErrMap[errText] || errText });
+        let startRes: Awaited<ReturnType<typeof suppyFetch>> | null = null;
+        for (const path of pathsToTry) {
+          console.log(`[activate/suppy] trying ${path} for key:`, cdkKey.trim().slice(0, 8) + "...");
+          startRes = await suppyFetch("POST", path, { code: cdkKey.trim(), session: rawSession });
+          if (startRes.ok) break; // success — stop trying
+          if (startRes.status !== 404 && startRes.status !== 0) break; // real error, not wrong endpoint
+          // 404 or network error → try next path
         }
-        // Return immediately — frontend will poll /api/suppy-recheck/:code
+
+        if (!startRes || !startRes.ok) {
+          const raw = startRes?.data;
+          const errText = (typeof raw === "string" ? raw : raw?.message) || "";
+          const message = suppyErrMap[errText] || errText || "Activation failed. Please try again.";
+          console.log(`[activate/suppy] failed: status=${startRes?.status} errText="${errText}"`);
+          return res.json({ success: false, message });
+        }
+
+        // Return immediately — frontend polls /api/suppy-recheck/:code
         return res.json({ success: true, started: true, code: cdkKey.trim(), service: suppyService });
       } catch (err) {
         console.error("[activate/suppy] error:", err);
