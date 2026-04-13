@@ -1915,21 +1915,41 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         "key not found": "Key not found or not available.",
       };
 
+      // For Claude keys the session is a raw cookie (sk-ant-sid0x-...).
+      // Suppy may expect it wrapped in a JSON object instead of a plain string.
+      // Build a list of (path, body) attempts to try in order.
+      type Attempt = { path: string; body: Record<string, unknown> };
+      const attempts: Attempt[] = suppyService === "claude"
+        ? [
+            // 1. Correct service path, raw session string
+            { path: "/claude/keys/activate-session", body: { code: cdkKey.trim(), session: rawSession } },
+            // 2. Chatgpt path (some Claude keys live here), raw string
+            { path: "/chatgpt/keys/activate-session", body: { code: cdkKey.trim(), session: rawSession } },
+            // 3. Chatgpt path, session wrapped in JSON object (Suppy may need this format)
+            { path: "/chatgpt/keys/activate-session", body: { code: cdkKey.trim(), session: { sessionKey: rawSession } } },
+            // 4. Chatgpt path with explicit service hint
+            { path: "/chatgpt/keys/activate-session", body: { code: cdkKey.trim(), session: rawSession, service: "claude" } },
+          ]
+        : [
+            { path: "/chatgpt/keys/activate-session", body: { code: cdkKey.trim(), session: rawSession } },
+          ];
+
       try {
         let startRes: Awaited<ReturnType<typeof suppyFetch>> | null = null;
-        for (const path of pathsToTry) {
-          console.log(`[activate/suppy] trying ${path} for key:`, cdkKey.trim().slice(0, 8) + "...");
-          startRes = await suppyFetch("POST", path, { code: cdkKey.trim(), session: rawSession });
-          if (startRes.ok) break; // success — stop trying
-          if (startRes.status !== 404 && startRes.status !== 0) break; // real error, not wrong endpoint
-          // 404 or network error → try next path
+        for (const attempt of attempts) {
+          console.log(`[activate/suppy] trying ${attempt.path} body-keys:${Object.keys(attempt.body).join(",")} for key:`, cdkKey.trim().slice(0, 8) + "...");
+          startRes = await suppyFetch("POST", attempt.path, attempt.body);
+          console.log(`[activate/suppy] → status:${startRes.status} ok:${startRes.ok} data:${JSON.stringify(startRes.data)}`);
+          if (startRes.ok) break;
+          // Only skip to next attempt on 404 (wrong endpoint) or 0 (network fail)
+          if (startRes.status !== 404 && startRes.status !== 0) break;
         }
 
         if (!startRes || !startRes.ok) {
           const raw = startRes?.data;
-          const errText = (typeof raw === "string" ? raw : raw?.message) || "";
+          const errText = (typeof raw === "string" ? raw : (raw?.message ?? raw?.error)) || "";
           const message = suppyErrMap[errText] || errText || "Activation failed. Please try again.";
-          console.log(`[activate/suppy] failed: status=${startRes?.status} errText="${errText}"`);
+          console.log(`[activate/suppy] all attempts failed. last status=${startRes?.status} raw="${JSON.stringify(raw)}"`);
           return res.json({ success: false, message });
         }
 
