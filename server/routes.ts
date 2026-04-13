@@ -1953,7 +1953,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           return res.json({ success: false, message });
         }
 
-        // Return immediately — frontend polls /api/suppy-recheck/:code
+        // If Suppy says "ok" / "completed", activation is already done — skip polling
+        const suppyStatus = startRes.data?.status;
+        if (suppyStatus === "ok" || suppyStatus === "completed") {
+          console.log(`[activate/suppy] instant activation (status:${suppyStatus}) for key:`, cdkKey.trim().slice(0, 8) + "...");
+          return res.json({ success: true, activated: true, code: cdkKey.trim(), service: suppyService });
+        }
+
+        // "started" = async activation in progress — frontend polls /api/suppy-recheck/:code
         return res.json({ success: true, started: true, code: cdkKey.trim(), service: suppyService });
       } catch (err) {
         console.error("[activate/suppy] error:", err);

@@ -262,7 +262,11 @@ export default function RedeemPage() {
       return res.json();
     },
     onSuccess: (data) => {
-      if (data.success && data.started) {
+      if (data.success && data.activated) {
+        // Suppy instant activation (status: "ok") — skip polling, go straight to success
+        setActivationResult({ email: data.email, subscription: data.subscription });
+        setStep(3);
+      } else if (data.success && data.started) {
         // Suppy async activation — start polling
         setSuppyPolling(true);
         setSuppyFailed(null);
