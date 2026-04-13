@@ -289,7 +289,7 @@ export default function RedeemPage() {
       return;
     }
     try {
-      const res = await fetch(`/api/suppy-activation-status/${encodeURIComponent(code)}`, { credentials: "include" });
+      const res = await fetch(`/api/suppy-recheck/${encodeURIComponent(code)}`, { credentials: "include" });
       const data = await res.json();
       if (data.pending === false) {
         setSuppyPolling(false);
@@ -303,7 +303,9 @@ export default function RedeemPage() {
         return;
       }
     } catch { /* swallow, retry */ }
-    suppyPollerRef.current = setTimeout(() => pollSuppy(code, attempt + 1), 4000);
+    // Poll quickly at first (catches instant activations), then slow down
+    const delay = attempt < 5 ? 2000 : 4000;
+    suppyPollerRef.current = setTimeout(() => pollSuppy(code, attempt + 1), delay);
   }
 
   // ── Suppy: definitive re-check after timeout ──────────────────────────────
