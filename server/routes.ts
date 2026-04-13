@@ -1883,7 +1883,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.post("/api/activate", async (req, res) => {
-    const { cdkKey, sessionData, apiSource } = req.body;
+    const { cdkKey, sessionData, apiSource, service } = req.body;
     if (!cdkKey || !sessionData) {
       return res.json({ success: false, message: "CDK key and session data are required." });
     }
@@ -1891,13 +1891,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     // ── Route to Suppy for Suppy keys ─────────────────────────────────────────
     if (apiSource === "suppy") {
+      // Use service-specific endpoint: Claude keys use /claude/keys/, ChatGPT keys use /chatgpt/keys/
+      const suppyService = service === "claude" ? "claude" : "chatgpt";
+      const activatePath = `/${suppyService}/keys/activate-session`;
+      const platform = suppyService === "claude" ? "Claude" : "ChatGPT";
       try {
-        console.log("[activate/suppy] key:", cdkKey.trim().slice(0, 8) + "...");
-        const startRes = await suppyFetch("POST", "/chatgpt/keys/activate-session", { code: cdkKey.trim(), session: rawSession });
+        console.log(`[activate/suppy] service:${suppyService} key:`, cdkKey.trim().slice(0, 8) + "...");
+        const startRes = await suppyFetch("POST", activatePath, { code: cdkKey.trim(), session: rawSession });
         if (!startRes.ok) {
           const errText = typeof startRes.data === "string" ? startRes.data : startRes.data?.message || "Activation failed.";
           const suppyErrMap: Record<string, string> = {
-            no_access_token: "No access token found in session. Please copy the full JSON from chatgpt.com/api/auth/session.",
+            no_access_token: `No session key found. Please follow the instructions to copy your ${platform} session.`,
             session_expired: "Your session has expired. Please get a fresh session token.",
             session_invalid: "Invalid session. Please get a fresh session token.",
             workspace_account: "Corporate/workspace accounts are not supported.",
@@ -1906,8 +1910,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           };
           return res.json({ success: false, message: suppyErrMap[errText] || errText });
         }
-        // Return immediately — frontend will poll /api/suppy-activation-status/:code
-        return res.json({ success: true, started: true, code: cdkKey.trim() });
+        // Return immediately — frontend will poll /api/suppy-recheck/:code
+        return res.json({ success: true, started: true, code: cdkKey.trim(), service: suppyService });
       } catch (err) {
         console.error("[activate/suppy] error:", err);
         return res.status(500).json({ success: false, message: "Activation service unavailable. Please try again." });
@@ -1986,8 +1990,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ── Suppy Activation Status Polling ──────────────────────────────────────
   app.get("/api/suppy-activation-status/:code", async (req, res) => {
     const { code } = req.params;
+    const suppyService = req.query.service === "claude" ? "claude" : "chatgpt";
     try {
-      const result = await suppyFetch("GET", `/chatgpt/keys/activation-status/${encodeURIComponent(code)}`);
+      const result = await suppyFetch("GET", `/${suppyService}/keys/activation-status/${encodeURIComponent(code)}`);
       if (result.status === 404) {
         return res.json({ pending: true, status: "started" });
       }
@@ -2012,15 +2017,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   /**
    * Definitive re-check: looks at BOTH the activation-status endpoint AND the
-   * key's actual status.  If the key is already "activated" on Suppy's side,
-   * we report success even when the activation-status endpoint still says
-   * "started" (Suppy sometimes never updates that endpoint after delivery).
+   * key's actual status.  Accepts ?service=claude|chatgpt to use the correct
+   * Suppy API path for each service type.
    */
   app.get("/api/suppy-recheck/:code", async (req, res) => {
     const { code } = req.params;
+    const suppyService = req.query.service === "claude" ? "claude" : "chatgpt";
     try {
       // 1. Check activation-status first (fastest confirmation)
-      const statusRes = await suppyFetch("GET", `/chatgpt/keys/activation-status/${encodeURIComponent(code)}`);
+      const statusRes = await suppyFetch("GET", `/${suppyService}/keys/activation-status/${encodeURIComponent(code)}`);
       if (statusRes.ok && statusRes.data && typeof statusRes.data === "object") {
         const d = statusRes.data;
         const s = typeof d.status === "string" ? d.status.toLowerCase() : "";
@@ -2035,11 +2040,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // 2. Fall back to checking the key's actual status
       const keyInfo = await suppyCheckKey(code);
       if (keyInfo?.found && keyInfo.status === "activated") {
-        console.log(`[suppy-recheck] Key ${code.slice(0, 8)}… is activated in key status even though activation-status is pending`);
+        console.log(`[suppy-recheck/${suppyService}] Key ${code.slice(0, 8)}… is activated in key status`);
         return res.json({ pending: false, success: true, email: keyInfo.activatedEmail ?? null, activationType: null });
       }
 
-      // Still not confirmed — still pending
       return res.json({ pending: true, status: "started" });
     } catch (err) {
       console.error("[suppy-recheck] error:", err);

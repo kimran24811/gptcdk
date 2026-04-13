@@ -139,9 +139,10 @@ export default function RedeemPage() {
   const [suppyPolling, setSuppyPolling] = useState(false);
   const [suppyPollCount, setSuppyPollCount] = useState(0);
   const [suppyFailed, setSuppyFailed] = useState<string | null>(null);
-  const [suppyTimedOut, setSuppyTimedOut] = useState(false); // true = polling timed out but may still succeed
+  const [suppyTimedOut, setSuppyTimedOut] = useState(false);
   const [suppyRecheckLoading, setSuppyRecheckLoading] = useState(false);
   const [suppyCode, setSuppyCode] = useState<string | null>(null);
+  const [suppyService, setSuppyService] = useState<string>("chatgpt");
   const suppyPollerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Nitro mode ────────────────────────────────────────────────────────────
@@ -199,6 +200,7 @@ export default function RedeemPage() {
     setSuppyFailed(null);
     setSuppyTimedOut(false);
     setSuppyCode(null);
+    setSuppyService("chatgpt");
     if (suppyPollerRef.current) clearTimeout(suppyPollerRef.current);
     // nitro
     setNitroSession("");
@@ -256,7 +258,7 @@ export default function RedeemPage() {
   // ── Standard: activate ────────────────────────────────────────────────────
   const activate = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/activate", { cdkKey, sessionData, apiSource: cdkInfo?.apiSource });
+      const res = await apiRequest("POST", "/api/activate", { cdkKey, sessionData, apiSource: cdkInfo?.apiSource, service: cdkInfo?.service });
       return res.json();
     },
     onSuccess: (data) => {
@@ -266,8 +268,11 @@ export default function RedeemPage() {
         setSuppyFailed(null);
         setSuppyTimedOut(false);
         setSuppyPollCount(0);
-        setSuppyCode(data.code ?? cdkKey.trim());
-        pollSuppy(data.code ?? cdkKey.trim(), 0);
+        const code = data.code ?? cdkKey.trim();
+        const svc = cdkInfo?.service ?? "chatgpt";
+        setSuppyCode(code);
+        setSuppyService(svc);
+        pollSuppy(code, 0, svc);
       } else if (data.success) {
         setActivationResult({ email: data.email, product: data.product, subscription: data.subscription, activatedAt: data.activatedAt });
         setStep(3);
@@ -282,18 +287,17 @@ export default function RedeemPage() {
   // Attempt 0-14: 2s apart (~30s total) — silent progress bar
   // Attempt 15+: 4s apart — amber "taking longer" box visible, polling continues
   // Attempt 60: give up entirely (total ~3.5 min)
-  async function pollSuppy(code: string, attempt: number) {
+  async function pollSuppy(code: string, attempt: number, svc = "chatgpt") {
     setSuppyPollCount(attempt + 1);
     if (attempt >= 60) {
       setSuppyPolling(false);
       setSuppyTimedOut(true);
       return;
     }
-    // After 30s (attempt 15) show the amber box — but keep polling
     if (attempt === 15) setSuppyTimedOut(true);
 
     try {
-      const res = await fetch(`/api/suppy-recheck/${encodeURIComponent(code)}`, { credentials: "include" });
+      const res = await fetch(`/api/suppy-recheck/${encodeURIComponent(code)}?service=${svc}`, { credentials: "include" });
       const data = await res.json();
       if (data.pending === false) {
         setSuppyPolling(false);
@@ -308,15 +312,16 @@ export default function RedeemPage() {
       }
     } catch { /* swallow, retry */ }
     const delay = attempt < 15 ? 2000 : 4000;
-    suppyPollerRef.current = setTimeout(() => pollSuppy(code, attempt + 1), delay);
+    suppyPollerRef.current = setTimeout(() => pollSuppy(code, attempt + 1, svc), delay);
   }
 
   // ── Suppy: definitive re-check after timeout ──────────────────────────────
   async function recheckSuppy() {
     if (!suppyCode || suppyRecheckLoading) return;
     setSuppyRecheckLoading(true);
+    const platform = suppyService === "claude" ? "Claude" : "ChatGPT";
     try {
-      const res = await fetch(`/api/suppy-recheck/${encodeURIComponent(suppyCode)}`, { credentials: "include" });
+      const res = await fetch(`/api/suppy-recheck/${encodeURIComponent(suppyCode)}?service=${suppyService}`, { credentials: "include" });
       const data = await res.json();
       if (data.pending === false) {
         if (data.success) {
@@ -329,9 +334,8 @@ export default function RedeemPage() {
           setSuppyFailed(data.message || "Activation failed. Please try again.");
         }
       } else {
-        // Still not confirmed — tell user to check ChatGPT directly
         setSuppyTimedOut(false);
-        setSuppyFailed("Not confirmed yet. Please open ChatGPT and check if your subscription is active — it may already be applied.");
+        setSuppyFailed(`Not confirmed yet. Please open ${platform} and check if your subscription is active — it may already be applied.`);
       }
     } catch {
       setSuppyFailed("Could not reach the server. Please try again.");
