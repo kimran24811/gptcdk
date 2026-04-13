@@ -257,12 +257,18 @@ async function suppyFetch(method: string, path: string, body?: object): Promise<
   }
 }
 
-async function suppyCheckKey(code: string): Promise<{
+async function suppyCheckKey(code: string, service = "chatgpt"): Promise<{
   found: boolean; status?: string; keyType?: string; service?: string;
   plan?: string; term?: string; activatedEmail?: string | null; activatedAt?: number | null;
 } | null> {
-  const res = await suppyFetch("GET", `/chatgpt/keys/${encodeURIComponent(code.trim())}`);
-  console.log("[suppy] checkKey status:", res.status, "data:", JSON.stringify(res.data));
+  // Try the service-specific endpoint first, fall back to chatgpt if 404
+  const path = `/${service}/keys/${encodeURIComponent(code.trim())}`;
+  let res = await suppyFetch("GET", path);
+  if (res.status === 404 && service !== "chatgpt") {
+    // Some keys may still be found on the chatgpt endpoint
+    res = await suppyFetch("GET", `/chatgpt/keys/${encodeURIComponent(code.trim())}`);
+  }
+  console.log(`[suppy] checkKey(${service}) status:`, res.status, "data:", JSON.stringify(res.data));
   if (res.status === 404) return { found: false };
   if (!res.ok || !res.data || typeof res.data !== "object") return null;
   const d = res.data;
@@ -2037,8 +2043,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       }
 
-      // 2. Fall back to checking the key's actual status
-      const keyInfo = await suppyCheckKey(code);
+      // 2. Fall back to checking the key's actual status via service-specific endpoint
+      const keyInfo = await suppyCheckKey(code, suppyService);
       if (keyInfo?.found && keyInfo.status === "activated") {
         console.log(`[suppy-recheck/${suppyService}] Key ${code.slice(0, 8)}… is activated in key status`);
         return res.json({ pending: false, success: true, email: keyInfo.activatedEmail ?? null, activationType: null });
