@@ -8,6 +8,7 @@ import NotFound from "@/pages/not-found";
 import RedeemPage from "@/pages/redeem";
 import BatchCheckPage from "@/pages/batch-check";
 import ShopPage from "@/pages/shop";
+import CheckoutPage from "@/pages/checkout";
 import LoginPage from "@/pages/login";
 import RegisterPage from "@/pages/register";
 import AccountPage from "@/pages/account";
@@ -111,9 +112,11 @@ function AnnouncementPopup() {
 function Router() {
   return (
     <Switch>
-      <Route path="/" component={RedeemPage} />
-      <Route path="/batch" component={BatchCheckPage} />
+      <Route path="/" component={ShopPage} />
       <Route path="/shop" component={ShopPage} />
+      <Route path="/checkout/:token" component={CheckoutPage} />
+      <Route path="/activate" component={RedeemPage} />
+      <Route path="/batch" component={BatchCheckPage} />
       <Route path="/login" component={LoginPage} />
       <Route path="/register" component={RegisterPage} />
       <Route path="/account" component={AccountPage} />

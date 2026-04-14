@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import bcrypt from "bcrypt";
 import { eq, desc, and, ne, sql, inArray, lt } from "drizzle-orm";
 import { db } from "./storage";
-import { users, transactions, orders, depositRequests, inventoryKeys, customProducts, customVouchers, announcementConfig, apiKeys, mainPlans } from "@shared/schema";
+import { users, transactions, orders, depositRequests, inventoryKeys, customProducts, customVouchers, announcementConfig, apiKeys, mainPlans, guestCheckouts, guestDeposits } from "@shared/schema";
 import crypto from "crypto";
 import { sendWhatsAppMessage, getRawQR, getConnectionStatus, setMessageHandler } from "./whatsapp";
 
@@ -261,6 +261,113 @@ async function creditDeposit(depositId: number, txHash: string): Promise<number 
 }
 
 /**
+ * Generate a unique USDT amount with micro-offset that doesn't collide
+ * with any active pending deposit across BOTH depositRequests AND guestDeposits.
+ */
+async function generateUniqueUsdtAmount(baseAmountUsd: number, network = "bep20"): Promise<string | null> {
+  for (let tries = 0; tries < 30; tries++) {
+    const microOffset = Math.floor(Math.random() * 99) + 1; // 1–99 units of 0.0001
+    const totalUnits = Math.round(baseAmountUsd * 10000) + microOffset;
+    const candidate = (totalUnits / 10000).toFixed(4);
+
+    const [col1] = await db.select({ id: depositRequests.id })
+      .from(depositRequests)
+      .where(and(eq(depositRequests.amountUsdt, candidate), eq(depositRequests.network, network), eq(depositRequests.status, "pending")))
+      .limit(1);
+    if (col1) continue;
+
+    const [col2] = await db.select({ id: guestDeposits.id })
+      .from(guestDeposits)
+      .where(and(eq(guestDeposits.amountUsdt, candidate), eq(guestDeposits.network, network), eq(guestDeposits.status, "pending")))
+      .limit(1);
+    if (!col2) return candidate;
+  }
+  return null;
+}
+
+/**
+ * Fulfill a guest checkout atomically — allocates inventory keys from the available pool.
+ * Returns "fulfilled" | "out_of_stock" | null (already processed).
+ */
+async function fulfillGuestCheckout(guestDepositId: number, txHash: string): Promise<"fulfilled" | "out_of_stock" | null> {
+  return db.transaction(async (tx) => {
+    // Guard: ensure this txHash hasn't been used in any table
+    const [txUsedRegular] = await tx.select({ id: depositRequests.id })
+      .from(depositRequests)
+      .where(and(eq(depositRequests.txHash, txHash), eq(depositRequests.status, "completed")))
+      .limit(1);
+    if (txUsedRegular) return null;
+
+    const [txUsedGuest] = await tx.select({ id: guestDeposits.id })
+      .from(guestDeposits)
+      .where(and(eq(guestDeposits.txHash, txHash), eq(guestDeposits.status, "completed")))
+      .limit(1);
+    if (txUsedGuest) return null;
+
+    // Lock the guestDeposit row
+    const [dep] = await tx.select().from(guestDeposits)
+      .where(and(eq(guestDeposits.id, guestDepositId), eq(guestDeposits.status, "pending")))
+      .limit(1);
+    if (!dep) return null;
+
+    // Lock the parent checkout
+    const [checkout] = await tx.select().from(guestCheckouts)
+      .where(and(eq(guestCheckouts.id, dep.checkoutId), eq(guestCheckouts.status, "pending_payment")))
+      .limit(1);
+    if (!checkout) return null;
+
+    // Mark deposit completed
+    await tx.update(guestDeposits)
+      .set({ status: "completed", txHash })
+      .where(eq(guestDeposits.id, dep.id));
+
+    // Mark checkout paid (transition state)
+    await tx.update(guestCheckouts)
+      .set({ status: "paid" })
+      .where(eq(guestCheckouts.id, checkout.id));
+
+    // Parse items and allocate inventory
+    const items: Array<{ planKey: string; planName: string; quantity: number; unitCents: number }> = JSON.parse(checkout.items);
+    const deliveredKeys: Array<{ planKey: string; keys: string[] }> = [];
+
+    for (const item of items) {
+      const allocated = await tx.select({ id: inventoryKeys.id, key: inventoryKeys.key })
+        .from(inventoryKeys)
+        .where(and(eq(inventoryKeys.plan, item.planKey), eq(inventoryKeys.status, "available")))
+        .limit(item.quantity)
+        .for("update", { skipLocked: true });
+
+      if (allocated.length < item.quantity) {
+        // Roll back and mark out_of_stock
+        await tx.update(guestCheckouts)
+          .set({ status: "out_of_stock" })
+          .where(eq(guestCheckouts.id, checkout.id));
+        console.log(`[guest] Checkout ${checkout.token} out_of_stock: needed ${item.quantity} ${item.planKey}, got ${allocated.length}`);
+        // Throw to trigger rollback — but we already updated deposit status above.
+        // Instead: do NOT throw; just return out_of_stock (tx will commit deposit=completed + checkout=out_of_stock)
+        return "out_of_stock";
+      }
+
+      const keyIds = allocated.map((k) => k.id);
+      await tx.update(inventoryKeys)
+        .set({ status: "sold", soldAt: new Date() })
+        .where(inArray(inventoryKeys.id, keyIds));
+
+      deliveredKeys.push({ planKey: item.planKey, keys: allocated.map((k) => k.key) });
+    }
+
+    // Generate order number and mark fulfilled
+    const orderNumber = "G" + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 5).toUpperCase();
+    await tx.update(guestCheckouts)
+      .set({ status: "fulfilled", deliveredKeys: JSON.stringify(deliveredKeys), orderNumber })
+      .where(eq(guestCheckouts.id, checkout.id));
+
+    console.log(`[guest] Checkout ${checkout.token} fulfilled — order ${orderNumber}`);
+    return "fulfilled";
+  });
+}
+
+/**
  * Background auto-processor: exported so server/index.ts can call it on startup.
  * Batch-scans ALL pending BEP-20 deposits in a single RPC call.
  */
@@ -280,22 +387,46 @@ export async function processAllPendingDeposits(): Promise<void> {
     // ── Step 2: Batch-scan all active pending deposits ────────────────────────
     const pending = await db.select().from(depositRequests)
       .where(and(eq(depositRequests.status, "pending"), sql`expires_at > ${now}`));
-    if (pending.length === 0) return;
 
     // Calculate how far back to scan: cover the full age of the oldest pending deposit
     // + a 2-minute safety buffer.  Cap at BSC_MAX_LOOKBACK_BLOCKS (~4 hours).
-    const oldestMs = Math.min(...pending.map((d) => d.createdAt.getTime()));
-    const ageSeconds = Math.ceil((Date.now() - oldestMs) / 1000);
-    const lookbackBlocks = Math.min(
-      BSC_MAX_LOOKBACK_BLOCKS,
-      Math.ceil(ageSeconds / BSC_BLOCK_TIME_S) + 40, // +40 blocks (~2 min) buffer
-    );
+    let lookbackBlocks = 200; // default when no regular deposits
+    if (pending.length > 0) {
+      const oldestMs = Math.min(...pending.map((d) => d.createdAt.getTime()));
+      const ageSeconds = Math.ceil((Date.now() - oldestMs) / 1000);
+      lookbackBlocks = Math.min(BSC_MAX_LOOKBACK_BLOCKS, Math.ceil(ageSeconds / BSC_BLOCK_TIME_S) + 40);
+    }
 
-    console.log(`[deposit] Scanning ${pending.length} active pending deposit(s) via BSCScan API (lookback: ${lookbackBlocks} blocks ≈ ${Math.round(lookbackBlocks * BSC_BLOCK_TIME_S / 60)} min)…`);
+    // ── Also collect pending guest deposits ──────────────────────────────────
+    const expiredGuestRows = await db.update(guestDeposits)
+      .set({ status: "expired" })
+      .where(and(eq(guestDeposits.status, "pending"), sql`expires_at <= ${now}`))
+      .returning({ id: guestDeposits.id, checkoutId: guestDeposits.checkoutId });
+    for (const g of expiredGuestRows) {
+      await db.update(guestCheckouts).set({ status: "expired" })
+        .where(and(eq(guestCheckouts.id, g.checkoutId), eq(guestCheckouts.status, "pending_payment")));
+    }
 
-    // One RPC call fetches logs for all pending amounts at once
-    const amounts = pending.map((d) => d.amountUsdt);
-    const foundMap = await scanBscDeposits(amounts, lookbackBlocks);
+    const pendingGuest = await db.select().from(guestDeposits)
+      .where(and(eq(guestDeposits.status, "pending"), sql`expires_at > ${now}`));
+
+    // Merge all amounts into one BSCScan scan call
+    const allAmounts = [
+      ...pending.map((d) => d.amountUsdt),
+      ...pendingGuest.map((d) => d.amountUsdt),
+    ];
+    if (allAmounts.length === 0) return;
+
+    // Extend lookback to cover oldest across both tables
+    let lookbackBlocksFinal = lookbackBlocks;
+    if (pendingGuest.length > 0) {
+      const guestOldestMs = Math.min(...pendingGuest.map((d) => d.createdAt.getTime()));
+      const guestAgeS = Math.ceil((Date.now() - guestOldestMs) / 1000);
+      lookbackBlocksFinal = Math.min(BSC_MAX_LOOKBACK_BLOCKS, Math.max(lookbackBlocks, Math.ceil(guestAgeS / BSC_BLOCK_TIME_S) + 40));
+    }
+
+    console.log(`[deposit] Scanning ${pending.length} regular + ${pendingGuest.length} guest deposit(s) via BSCScan API (lookback: ${lookbackBlocksFinal} blocks)…`);
+    const foundMap = await scanBscDeposits(allAmounts, lookbackBlocksFinal);
 
     for (const dep of pending) {
       const txHash = foundMap.get(dep.amountUsdt);
@@ -307,6 +438,22 @@ export async function processAllPendingDeposits(): Promise<void> {
           }
         } catch (err) {
           console.error(`[deposit] Failed to credit deposit #${dep.id}:`, err);
+        }
+      }
+    }
+
+    for (const dep of pendingGuest) {
+      const txHash = foundMap.get(dep.amountUsdt);
+      if (txHash) {
+        try {
+          const result = await fulfillGuestCheckout(dep.id, txHash);
+          if (result === "fulfilled") {
+            console.log(`[guest] ✓ Auto-fulfilled guest deposit #${dep.id} (${dep.amountUsdt} USDT)`);
+          } else if (result === "out_of_stock") {
+            console.warn(`[guest] Guest deposit #${dep.id} paid but out of stock`);
+          }
+        } catch (err) {
+          console.error(`[guest] Failed to fulfill guest deposit #${dep.id}:`, err);
         }
       }
     }
@@ -2590,6 +2737,235 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (err) {
       console.error("Purchase custom product error:", err);
       return res.status(500).json({ success: false, message: "Purchase failed. Please try again." });
+    }
+  });
+
+  // ── Guest Checkout ────────────────────────────────────────────────────────
+
+  /**
+   * POST /api/guest/checkout
+   * Creates a guest checkout session — no auth required.
+   * Body: { items: [{planKey, quantity}], guestEmail? }
+   * Returns: { token, amountUsdt, walletAddress, totalCents, expiresAt, network }
+   */
+  app.post("/api/guest/checkout", async (req, res) => {
+    try {
+      const { items: rawItems, guestEmail } = req.body;
+
+      if (!Array.isArray(rawItems) || rawItems.length === 0) {
+        return res.json({ success: false, message: "No items provided." });
+      }
+
+      // Fetch active plans to validate and price items
+      const activePlans = await db.select().from(mainPlans).where(eq(mainPlans.active, 1));
+      const planMap = new Map(activePlans.map((p) => [p.planKey, p]));
+
+      const cartItems: Array<{ planKey: string; planName: string; quantity: number; unitCents: number }> = [];
+      let totalCents = 0;
+
+      for (const raw of rawItems) {
+        const planKey = typeof raw.planKey === "string" ? raw.planKey.trim() : "";
+        const quantity = Math.max(1, parseInt(raw.quantity, 10) || 1);
+        const plan = planMap.get(planKey);
+        if (!plan) {
+          return res.json({ success: false, message: `Plan not found: ${planKey}` });
+        }
+        // Only inventory-backed plans (action !== "whatsapp") can be bought via guest checkout
+        if (plan.action === "whatsapp") {
+          return res.json({ success: false, message: `Plan "${plan.name}" requires WhatsApp order.` });
+        }
+        const unitCents = Math.round(resolveCustomPrice(planKey, quantity) * 100);
+        if (unitCents <= 0) {
+          return res.json({ success: false, message: `No pricing found for plan: ${planKey}` });
+        }
+        cartItems.push({ planKey, planName: plan.name, quantity, unitCents });
+        totalCents += unitCents * quantity;
+      }
+
+      if (totalCents <= 0) {
+        return res.json({ success: false, message: "Order total is zero." });
+      }
+
+      // Generate a unique USDT amount with micro-offset
+      const baseUsd = totalCents / 100;
+      const amountUsdt = await generateUniqueUsdtAmount(baseUsd);
+      if (!amountUsdt) {
+        return res.status(503).json({ success: false, message: "Could not generate a unique payment amount. Please try again shortly." });
+      }
+
+      const token = crypto.randomUUID();
+      const expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000); // 2 hours
+
+      let checkoutId: number;
+      try {
+        const [checkout] = await db.insert(guestCheckouts).values({
+          token,
+          guestEmail: typeof guestEmail === "string" && guestEmail.trim() ? guestEmail.trim() : null,
+          items: JSON.stringify(cartItems),
+          totalCents,
+          amountUsdt,
+          status: "pending_payment",
+          expiresAt,
+        }).returning({ id: guestCheckouts.id });
+        checkoutId = checkout.id;
+      } catch (err) {
+        console.error("[guest] checkout insert error:", err);
+        return res.status(500).json({ success: false, message: "Could not create checkout." });
+      }
+
+      try {
+        await db.insert(guestDeposits).values({
+          checkoutId,
+          amountUsdt,
+          amountCents: totalCents,
+          network: "bep20",
+          status: "pending",
+          expiresAt,
+        });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("uniq_pending_guest_deposit_amount")) {
+          return res.status(503).json({ success: false, message: "Could not generate a unique payment amount. Please try again." });
+        }
+        throw err;
+      }
+
+      return res.json({
+        success: true,
+        token,
+        amountUsdt,
+        walletAddress: USDT_BEP20_ADDRESS,
+        totalCents,
+        network: "bep20",
+        expiresAt: expiresAt.toISOString(),
+        items: cartItems,
+      });
+    } catch (err) {
+      console.error("[guest] checkout create error:", err);
+      return res.status(500).json({ success: false, message: "Internal error." });
+    }
+  });
+
+  /**
+   * GET /api/guest/checkout/:token
+   * Returns current status of a guest checkout.
+   */
+  app.get("/api/guest/checkout/:token", async (req, res) => {
+    try {
+      const { token } = req.params;
+      const [checkout] = await db.select().from(guestCheckouts).where(eq(guestCheckouts.token, token)).limit(1);
+      if (!checkout) return res.json({ success: false, message: "Checkout not found." });
+
+      const items = JSON.parse(checkout.items);
+      const deliveredKeys = checkout.deliveredKeys ? JSON.parse(checkout.deliveredKeys) : null;
+
+      return res.json({
+        success: true,
+        status: checkout.status,
+        amountUsdt: checkout.amountUsdt,
+        totalCents: checkout.totalCents,
+        walletAddress: USDT_BEP20_ADDRESS,
+        network: "bep20",
+        items,
+        expiresAt: checkout.expiresAt.toISOString(),
+        deliveredKeys,
+        orderNumber: checkout.orderNumber,
+      });
+    } catch (err) {
+      console.error("[guest] checkout get error:", err);
+      return res.status(500).json({ success: false, message: "Internal error." });
+    }
+  });
+
+  /**
+   * POST /api/guest/checkout/:token/check
+   * Check payment status — auto-scans or verifies provided txHash.
+   * Body (optional): { txHash? }
+   */
+  app.post("/api/guest/checkout/:token/check", async (req, res) => {
+    try {
+      const { token } = req.params;
+      const userTxHash = typeof req.body?.txHash === "string" ? req.body.txHash.trim() : null;
+
+      const [checkout] = await db.select().from(guestCheckouts).where(eq(guestCheckouts.token, token)).limit(1);
+      if (!checkout) return res.json({ success: false, message: "Checkout not found." });
+
+      // Already done
+      if (checkout.status === "fulfilled") {
+        const deliveredKeys = checkout.deliveredKeys ? JSON.parse(checkout.deliveredKeys) : null;
+        return res.json({ success: true, status: "fulfilled", deliveredKeys, orderNumber: checkout.orderNumber });
+      }
+      if (checkout.status === "out_of_stock") {
+        return res.json({ success: true, status: "out_of_stock", message: "Your payment was received but we ran out of stock. Please contact support." });
+      }
+      if (checkout.status === "expired") {
+        return res.json({ success: true, status: "expired", message: "This checkout session has expired." });
+      }
+      if (new Date() > checkout.expiresAt) {
+        await db.update(guestCheckouts).set({ status: "expired" }).where(eq(guestCheckouts.id, checkout.id));
+        await db.update(guestDeposits).set({ status: "expired" }).where(and(eq(guestDeposits.checkoutId, checkout.id), eq(guestDeposits.status, "pending")));
+        return res.json({ success: true, status: "expired", message: "This checkout session has expired." });
+      }
+
+      // Fetch the matching deposit
+      const [dep] = await db.select().from(guestDeposits)
+        .where(and(eq(guestDeposits.checkoutId, checkout.id), eq(guestDeposits.status, "pending")))
+        .limit(1);
+      if (!dep) return res.json({ success: true, status: checkout.status, message: "No active deposit for this checkout." });
+
+      const expectedWei = BigInt(Math.round(parseFloat(checkout.amountUsdt) * 1_000_000)) * BigInt("1000000000000");
+      let found = false;
+      let txHash: string | null = null;
+
+      // ── If user provided a TX hash: verify it directly ─────────────────────
+      if (userTxHash) {
+        const result = await verifyBep20Hash(userTxHash, expectedWei);
+        if (result.ok) {
+          found = true;
+          txHash = userTxHash;
+        } else if (result.reason === "notusdt") {
+          return res.json({ success: true, status: "pending", message: "Transaction doesn't contain a USDT BEP-20 transfer. Make sure you sent on BSC network." });
+        } else if (result.reason === "mismatch") {
+          return res.json({ success: true, status: "pending", message: "Transaction found but wrong wallet or wrong amount. Please check and try again." });
+        }
+      }
+
+      // ── Batch scan if no txHash or not yet confirmed ────────────────────────
+      if (!found) {
+        const depositAgeS = Math.ceil((Date.now() - dep.createdAt.getTime()) / 1000);
+        const lookbackBlocks = Math.min(BSC_MAX_LOOKBACK_BLOCKS, Math.ceil(depositAgeS / BSC_BLOCK_TIME_S) + 40);
+        const scanResults = await scanBscDeposits([checkout.amountUsdt], lookbackBlocks);
+        const scannedHash = scanResults.get(checkout.amountUsdt);
+        if (scannedHash) {
+          found = true;
+          txHash = scannedHash;
+        }
+      }
+
+      if (!found || !txHash) {
+        return res.json({ success: true, status: "pending", message: "Payment not detected yet. Please wait or provide your transaction hash." });
+      }
+
+      // Fulfill!
+      const fulfillResult = await fulfillGuestCheckout(dep.id, txHash);
+      if (fulfillResult === "fulfilled") {
+        const [updated] = await db.select().from(guestCheckouts).where(eq(guestCheckouts.token, token)).limit(1);
+        const deliveredKeys = updated?.deliveredKeys ? JSON.parse(updated.deliveredKeys) : null;
+        return res.json({ success: true, status: "fulfilled", deliveredKeys, orderNumber: updated?.orderNumber });
+      } else if (fulfillResult === "out_of_stock") {
+        return res.json({ success: true, status: "out_of_stock", message: "Your payment was received but we ran out of stock. Please contact support on WhatsApp." });
+      } else {
+        // null means already processed in a concurrent request — refetch
+        const [updated] = await db.select().from(guestCheckouts).where(eq(guestCheckouts.token, token)).limit(1);
+        if (updated?.status === "fulfilled") {
+          const deliveredKeys = updated.deliveredKeys ? JSON.parse(updated.deliveredKeys) : null;
+          return res.json({ success: true, status: "fulfilled", deliveredKeys, orderNumber: updated.orderNumber });
+        }
+        return res.json({ success: true, status: updated?.status ?? "pending" });
+      }
+    } catch (err) {
+      console.error("[guest] checkout check error:", err);
+      return res.status(500).json({ success: false, message: "Internal error." });
     }
   });
 

@@ -111,6 +111,40 @@ export const mainPlans = pgTable("main_plans", {
 
 export type MainPlan = typeof mainPlans.$inferSelect;
 
+// ── Guest Checkout (no account required) ─────────────────────────────────────
+export const guestCheckouts = pgTable("guest_checkouts", {
+  id: serial("id").primaryKey(),
+  token: text("token").notNull().unique(),           // UUID used in all URLs
+  guestEmail: text("guest_email"),                   // optional contact email
+  items: text("items").notNull(),                    // JSON: [{planKey, planName, quantity, unitCents}]
+  totalCents: integer("total_cents").notNull(),
+  amountUsdt: text("amount_usdt").notNull(),         // unique-offset USDT amount to pay
+  status: text("status").notNull().default("pending_payment"), // pending_payment | paid | fulfilled | out_of_stock | expired
+  deliveredKeys: text("delivered_keys"),             // JSON: [{planKey, keys:[]}] — set on fulfillment
+  orderNumber: text("order_number"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  expiresAt: timestamp("expires_at").notNull(),
+});
+
+export const guestDeposits = pgTable("guest_deposits", {
+  id: serial("id").primaryKey(),
+  checkoutId: integer("checkout_id").notNull().references(() => guestCheckouts.id),
+  amountUsdt: text("amount_usdt").notNull(),         // same unique-offset amount as checkout
+  amountCents: integer("amount_cents").notNull(),
+  network: text("network").notNull().default("bep20"),
+  status: text("status").notNull().default("pending"), // pending | completed | expired
+  txHash: text("tx_hash"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  expiresAt: timestamp("expires_at").notNull(),
+}, (table) => ({
+  uniqPendingGuestDepositAmount: uniqueIndex("uniq_pending_guest_deposit_amount")
+    .on(table.network, table.amountUsdt)
+    .where(sql`${table.status} = 'pending'`),
+}));
+
+export type GuestCheckout = typeof guestCheckouts.$inferSelect;
+export type GuestDeposit = typeof guestDeposits.$inferSelect;
+
 // ── API Keys (user-generated for public API access) ──────────────────────────
 export const apiKeys = pgTable("api_keys", {
   id: serial("id").primaryKey(),
