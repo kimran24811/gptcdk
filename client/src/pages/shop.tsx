@@ -198,7 +198,7 @@ function DeliveryDialog({ result, onClose }: { result: PurchaseResult | null; on
               <code className="text-xs font-mono text-foreground flex-1 break-all">{key}</code>
               <div className="flex items-center gap-1.5 shrink-0">
                 <CopyButton text={key} />
-                <a href={`/?key=${encodeURIComponent(key)}`} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-primary/40 bg-primary/5 text-primary text-xs font-medium hover:bg-primary/10 transition-colors" data-testid={`button-redeem-delivery-${idx}`}>
+                <a href={`/activate?key=${encodeURIComponent(key)}`} className="flex items-center gap-1 px-2 py-1.5 rounded-md border border-primary/40 bg-primary/5 text-primary text-xs font-medium hover:bg-primary/10 transition-colors" data-testid={`button-redeem-delivery-${idx}`}>
                   <Zap className="w-3 h-3" /> Redeem
                 </a>
               </div>
@@ -217,8 +217,11 @@ function DeliveryDialog({ result, onClose }: { result: PurchaseResult | null; on
 function OrderDialog({ plan, onClose, onSuccess }: { plan: DialogPlan | null; onClose: () => void; onSuccess: (r: PurchaseResult) => void }) {
   const { toast } = useToast();
   const { user } = useAuth();
+  const [, navigate] = useLocation();
   const [quantity, setQuantity] = useState(1);
   const [qtyInput, setQtyInput] = useState("1");
+  const [guestEmail, setGuestEmail] = useState("");
+  const [checkingOut, setCheckingOut] = useState(false);
 
   const unitPrice = (() => {
     if (!plan) return 0;
@@ -262,6 +265,28 @@ function OrderDialog({ plan, onClose, onSuccess }: { plan: DialogPlan | null; on
     },
     onError: () => toast({ title: "Purchase failed", description: "Could not connect. Please try again.", variant: "destructive" }),
   });
+
+  const guestCheckout = async () => {
+    if (!plan) return;
+    setCheckingOut(true);
+    try {
+      const res = await apiRequest("POST", "/api/guest/checkout", {
+        items: [{ planKey: plan.id, quantity }],
+        guestEmail: guestEmail.trim() || undefined,
+      });
+      const data = await res.json();
+      if (data.success) {
+        onClose();
+        navigate(`/checkout/${data.token}`);
+      } else {
+        toast({ title: "Checkout failed", description: data.message, variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Checkout failed", description: "Could not connect. Please try again.", variant: "destructive" });
+    } finally {
+      setCheckingOut(false);
+    }
+  };
 
   if (!plan) return null;
 
@@ -328,47 +353,60 @@ function OrderDialog({ plan, onClose, onSuccess }: { plan: DialogPlan | null; on
 
           <div className="border-t border-border" />
 
-          {/* Total + action */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-foreground">Total</span>
-              <span className="text-xl font-black text-foreground">${totalPrice} <span className="text-xs font-normal text-muted-foreground">USDT</span></span>
-            </div>
-
-            {!user ? (
-              <div className="space-y-2">
-                <a href="/login" className="block" data-testid="button-login-to-purchase">
-                  <Button className="w-full gap-2"><LogIn className="w-4 h-4" /> Login to Purchase</Button>
-                </a>
-                <p className="text-xs text-muted-foreground text-center">Create a free account to buy instantly</p>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <div className={`flex items-center justify-between text-xs rounded-lg px-3 py-2 ${balanceSufficient ? "bg-primary/5 border border-primary/20" : "bg-destructive/5 border border-destructive/20"}`}>
-                  <span className="text-muted-foreground">Your balance</span>
-                  <span className={`font-semibold ${balanceSufficient ? "text-primary" : "text-destructive"}`} data-testid="text-shop-balance">
-                    ${(user.balanceCents / 100).toFixed(2)}
-                  </span>
-                </div>
-                {!balanceSufficient && (
-                  <p className="text-xs text-destructive text-center">
-                    Need ${shortfall.toFixed(2)} more —{" "}
-                    <a href="/account" className="underline font-medium">top up</a>
-                  </p>
-                )}
-                <Button
-                  className="w-full gap-2" size="lg"
-                  onClick={() => purchase.mutate()}
-                  disabled={!balanceSufficient || purchase.isPending}
-                  data-testid="button-buy-now"
-                >
-                  {purchase.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-                  {purchase.isPending ? "Processing..." : `Buy Now — $${totalPrice}`}
-                </Button>
-                <p className="text-xs text-muted-foreground text-center">Keys delivered instantly on screen</p>
-              </div>
-            )}
+          {/* Total */}
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium text-foreground">Total</span>
+            <span className="text-xl font-black text-foreground">${totalPrice} <span className="text-xs font-normal text-muted-foreground">USDT</span></span>
           </div>
+
+          {/* Guest checkout (primary path) */}
+          <div className="space-y-2">
+            <Input
+              type="email"
+              placeholder="Email (optional) — for order receipt"
+              value={guestEmail}
+              onChange={(e) => setGuestEmail(e.target.value)}
+              className="text-sm"
+              data-testid="input-guest-email"
+            />
+            <Button
+              className="w-full gap-2" size="lg"
+              onClick={guestCheckout}
+              disabled={checkingOut}
+              data-testid="button-guest-checkout"
+            >
+              {checkingOut ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+              {checkingOut ? "Creating order..." : `Pay $${totalPrice} USDT`}
+            </Button>
+            <p className="text-xs text-muted-foreground text-center">Pay with USDT · Keys delivered instantly</p>
+          </div>
+
+          {/* Balance purchase for logged-in users */}
+          {user && (
+            <div className="space-y-2 pt-1 border-t border-border">
+              <p className="text-xs font-medium text-muted-foreground text-center">— or pay with your balance —</p>
+              <div className={`flex items-center justify-between text-xs rounded-lg px-3 py-2 ${balanceSufficient ? "bg-primary/5 border border-primary/20" : "bg-destructive/5 border border-destructive/20"}`}>
+                <span className="text-muted-foreground">Balance</span>
+                <span className={`font-semibold ${balanceSufficient ? "text-primary" : "text-destructive"}`} data-testid="text-shop-balance">
+                  ${(user.balanceCents / 100).toFixed(2)}
+                </span>
+              </div>
+              {!balanceSufficient && (
+                <p className="text-xs text-destructive text-center">
+                  Need ${shortfall.toFixed(2)} more — <a href="/account" className="underline font-medium">top up</a>
+                </p>
+              )}
+              <Button
+                variant="outline" className="w-full gap-2"
+                onClick={() => purchase.mutate()}
+                disabled={!balanceSufficient || purchase.isPending}
+                data-testid="button-buy-now"
+              >
+                {purchase.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                {purchase.isPending ? "Processing..." : "Pay with Balance"}
+              </Button>
+            </div>
+          )}
         </div>
       </DialogContent>
     </Dialog>
@@ -628,7 +666,7 @@ export default function ShopPage() {
                   <Zap className="w-4 h-4" />
                   View Plans
                 </Button>
-                <a href="/" data-testid="button-activate-key">
+                <a href="/activate" data-testid="button-activate-key">
                   <Button size="lg" variant="outline" className="gap-2 text-base px-6">
                     Activate Key
                     <ArrowRight className="w-4 h-4" />

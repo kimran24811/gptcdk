@@ -24,9 +24,9 @@ export function PageLayout({
   const { user, isAdmin, logout } = useAuth();
 
   const NAV_ITEMS = [
-    { href: "/", label: "Redeem", icon: Zap },
+    { href: "/", label: "Shop", icon: ShoppingBag },
+    { href: "/activate", label: "Redeem", icon: Zap },
     { href: "/batch", label: "Batch Check", icon: List },
-    { href: "/shop", label: "Shop", icon: ShoppingBag },
     ...(user ? [{ href: "/account", label: "Account", icon: User }] : []),
     { href: "/developers", label: "Developers", icon: Code2 },
     ...(isAdmin ? [{ href: "/admin", label: "Admin", icon: LayoutDashboard }] : []),
@@ -51,7 +51,7 @@ export function PageLayout({
           <div className="flex items-center gap-2 sm:gap-3">
             <nav className="hidden sm:flex items-center gap-0.5">
               {NAV_ITEMS.map((item) => {
-                const active = location === item.href;
+                const active = location === item.href || (item.href === "/" && location === "/shop");
                 return (
                   <a
                     key={item.href}
