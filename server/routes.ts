@@ -11,14 +11,20 @@ const USDT_BEP20_ADDRESS = (process.env.USDT_BEP20_ADDRESS || "0x0c31c91ec2cbb60
 const USDT_BEP20_CONTRACT = "0x55d398326f99059ff775485246999027b3197955";
 const ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 const BSCSCAN_API_KEY = process.env.BSCSCAN_API_KEY || "9XYU1BJ44JJN4NSIPKTCVJ9UXPQZY2JWRU";
-const BSCSCAN_API_BASE = "https://api.bscscan.com/api";
+// Etherscan V2 unified API — chainid=56 targets BSC
+const BSCSCAN_API_BASE = "https://api.etherscan.io/v2/api";
+const BSC_CHAIN_ID = "56";
 
-// ── BSCScan API helper ────────────────────────────────────────────────────────
+// ── Etherscan V2 API helper ───────────────────────────────────────────────────
 
 async function bscscanGet(params: Record<string, string | number>): Promise<unknown> {
-  const qs = new URLSearchParams({ apikey: BSCSCAN_API_KEY, ...Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)])) });
+  const qs = new URLSearchParams({
+    chainid: BSC_CHAIN_ID,
+    apikey: BSCSCAN_API_KEY,
+    ...Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)])),
+  });
   const resp = await fetch(`${BSCSCAN_API_BASE}?${qs}`, { signal: AbortSignal.timeout(15000) });
-  if (!resp.ok) throw new Error(`BSCScan HTTP ${resp.status}`);
+  if (!resp.ok) throw new Error(`Etherscan V2 HTTP ${resp.status}`);
   return resp.json();
 }
 
