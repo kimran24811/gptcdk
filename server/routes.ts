@@ -15,7 +15,32 @@ const BSCSCAN_API_KEY = process.env.BSCSCAN_API_KEY || "9XYU1BJ44JJN4NSIPKTCVJ9U
 const BSCSCAN_API_BASE = "https://api.etherscan.io/v2/api";
 const BSC_CHAIN_ID = "56";
 
-// ── Etherscan V2 API helper ───────────────────────────────────────────────────
+// Public BSC RPC endpoints used ONLY for single-TX receipt lookups.
+// eth_getTransactionReceipt is a lightweight call — these free endpoints handle it fine.
+// (eth_getLogs over block ranges is what gets rate-limited — we don't use that anymore.)
+const BSC_RECEIPT_RPCS = [
+  "https://bsc-dataseed.binance.org/",
+  "https://bsc-dataseed1.bnbchain.org/",
+  "https://bsc-dataseed2.bnbchain.org/",
+  "https://bsc.publicnode.com",
+  "https://1rpc.io/bnb",
+  "https://binance.llamarpc.com",
+];
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+async function bscRpcCall(endpoint: string, method: string, params: unknown[]): Promise<unknown> {
+  const resp = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const data = await resp.json() as { result?: unknown; error?: { message?: string } };
+  if (data.error) throw new Error(data.error.message ?? "RPC error");
+  return data.result;
+}
 
 async function bscscanGet(params: Record<string, string | number>): Promise<unknown> {
   const qs = new URLSearchParams({
@@ -113,24 +138,55 @@ async function scanBscDeposits(
 }
 
 /**
- * Verify a specific tx hash for a BEP-20 USDT transfer to our wallet.
- * Uses eth_getTransactionByHash to find the block, then tokentx to confirm the transfer.
+ * Verify a specific tx hash instantly via direct BSC RPC (eth_getTransactionReceipt).
+ * This is a single lightweight call — not rate-limited like eth_getLogs.
+ * Falls back to BSCScan V2 tokentx if all RPC nodes fail.
  */
 async function verifyBep20Hash(txHash: string, minWei: bigint): Promise<{ ok: boolean; reason?: string }> {
+  const walletPadded = "0x000000000000000000000000" + USDT_BEP20_ADDRESS.slice(2);
+
+  // ── Path 1: direct RPC receipt lookup (fast, ~200ms) ─────────────────────
+  for (const rpc of BSC_RECEIPT_RPCS) {
+    try {
+      const receipt = await bscRpcCall(rpc, "eth_getTransactionReceipt", [txHash]) as {
+        status?: string;
+        logs?: Array<{ address: string; topics: string[]; data: string }>;
+      } | null;
+
+      if (receipt === null) continue; // not found on this node yet, try next
+
+      console.log(`[deposit] verifyHash via ${rpc.split("/")[2]}: status=${receipt.status} logs=${receipt.logs?.length ?? 0}`);
+
+      if (receipt.status === "0x0") return { ok: false, reason: "failed" };
+
+      let foundUsdt = false;
+      for (const log of receipt.logs ?? []) {
+        if (log.address?.toLowerCase() !== USDT_BEP20_CONTRACT) continue;
+        foundUsdt = true;
+        if (log.topics?.[0]?.toLowerCase() !== ERC20_TRANSFER_TOPIC) continue;
+        if (log.topics?.[2]?.toLowerCase() !== walletPadded) continue;
+        const val = BigInt(log.data ?? "0x0");
+        console.log(`[deposit] verifyHash: USDT transfer val=${val} minWei=${minWei}`);
+        if (val >= minWei) return { ok: true };
+        return { ok: false, reason: "mismatch" };
+      }
+      return { ok: false, reason: foundUsdt ? "mismatch" : "notusdt" };
+    } catch (err) {
+      console.warn(`[deposit] verifyHash RPC ${rpc.split("/")[2]} failed: ${(err as Error).message}`);
+    }
+  }
+
+  // ── Path 2: BSCScan V2 tokentx fallback ──────────────────────────────────
+  console.warn("[deposit] verifyHash: all RPC nodes failed, falling back to BSCScan tokentx");
   try {
-    // Step 1: find the transaction and its block number
     const txRes = await bscscanGet({
       module: "proxy", action: "eth_getTransactionByHash", txhash: txHash,
-    }) as { result?: { blockNumber?: string; hash?: string } | null };
+    }) as { result?: { blockNumber?: string } | null };
 
-    console.log(`[deposit] verifyHash txLookup: blockNumber=${txRes.result?.blockNumber ?? "null"}`);
+    const blockHex = txRes.result?.blockNumber;
+    if (!blockHex) return { ok: false, reason: "notfound" };
+    const blockNum = parseInt(blockHex, 16);
 
-    if (!txRes.result?.blockNumber) return { ok: false, reason: "notfound" };
-
-    const blockNum = parseInt(txRes.result.blockNumber, 16);
-    if (!blockNum || isNaN(blockNum)) return { ok: false, reason: "notfound" };
-
-    // Step 2: get token transfers in that block and look for our hash
     const tokenRes = await bscscanGet({
       module: "account", action: "tokentx",
       contractaddress: USDT_BEP20_CONTRACT,
@@ -138,30 +194,21 @@ async function verifyBep20Hash(txHash: string, minWei: bigint): Promise<{ ok: bo
       startblock: blockNum,
       endblock: blockNum + 1,
       sort: "asc",
-    }) as { status: string; message: string; result: Array<{ hash: string; to: string; value: string }> | string };
+    }) as { status: string; result: Array<{ hash: string; to: string; value: string }> | string };
 
-    console.log(`[deposit] verifyHash tokentx block ${blockNum}: status=${tokenRes.status} count=${Array.isArray(tokenRes.result) ? tokenRes.result.length : tokenRes.result}`);
-
-    if (tokenRes.status !== "1" || !Array.isArray(tokenRes.result)) {
-      return { ok: false, reason: "notusdt" };
-    }
+    if (tokenRes.status !== "1" || !Array.isArray(tokenRes.result)) return { ok: false, reason: "notusdt" };
 
     for (const tx of tokenRes.result) {
       if (tx.hash?.toLowerCase() !== txHash.toLowerCase()) continue;
-      if (tx.to?.toLowerCase() !== USDT_BEP20_ADDRESS) {
-        console.log(`[deposit] verifyHash: tx found but sent to ${tx.to}, expected ${USDT_BEP20_ADDRESS}`);
-        return { ok: false, reason: "mismatch" };
-      }
+      if (tx.to?.toLowerCase() !== USDT_BEP20_ADDRESS) return { ok: false, reason: "mismatch" };
       const value = BigInt(tx.value ?? "0");
-      console.log(`[deposit] verifyHash: matched tx value=${value} minWei=${minWei}`);
+      console.log(`[deposit] verifyHash BSCScan fallback: value=${value} minWei=${minWei}`);
       if (value >= minWei) return { ok: true };
       return { ok: false, reason: "mismatch" };
     }
-
-    // Hash not in token transfers for that block — likely not a USDT transfer
     return { ok: false, reason: "notusdt" };
   } catch (err) {
-    console.error("[deposit] verifyHash failed:", (err as Error).message);
+    console.error("[deposit] verifyHash BSCScan fallback failed:", (err as Error).message);
     return { ok: false, reason: "error" };
   }
 }
