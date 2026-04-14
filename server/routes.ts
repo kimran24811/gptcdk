@@ -10,42 +10,26 @@ import { sendWhatsAppMessage, getRawQR, getConnectionStatus, setMessageHandler }
 const USDT_BEP20_ADDRESS = (process.env.USDT_BEP20_ADDRESS || "0x0c31c91ec2cbb607aeca28c1bc09c55352db2fea").toLowerCase();
 const USDT_BEP20_CONTRACT = "0x55d398326f99059ff775485246999027b3197955";
 const ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+const BSCSCAN_API_KEY = process.env.BSCSCAN_API_KEY || "9XYU1BJ44JJN4NSIPKTCVJ9UXPQZY2JWRU";
+const BSCSCAN_API_BASE = "https://api.bscscan.com/api";
 
-// Public BSC RPC endpoints — no API key required
-const BSC_RPC_ENDPOINTS = [
-  "https://bsc-dataseed.binance.org/",
-  "https://bsc-dataseed1.defibit.io/",
-  "https://bsc-dataseed2.defibit.io/",
-  "https://rpc.ankr.com/bsc",
-];
+// ── BSCScan API helper ────────────────────────────────────────────────────────
 
-// ── BSC RPC helpers ───────────────────────────────────────────────────────────
-
-async function bscRpcCall(endpoint: string, method: string, params: unknown[], id = 1): Promise<unknown> {
-  const resp = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", method, params, id }),
-    signal: AbortSignal.timeout(10000),
-  });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  const data = await resp.json() as { result?: unknown; error?: { message?: string } };
-  if (data.error) throw new Error(data.error.message ?? "RPC error");
-  return data.result;
+async function bscscanGet(params: Record<string, string | number>): Promise<unknown> {
+  const qs = new URLSearchParams({ apikey: BSCSCAN_API_KEY, ...Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)])) });
+  const resp = await fetch(`${BSCSCAN_API_BASE}?${qs}`, { signal: AbortSignal.timeout(15000) });
+  if (!resp.ok) throw new Error(`BSCScan HTTP ${resp.status}`);
+  return resp.json();
 }
 
 // BSC produces ~1 block every 3 seconds
 const BSC_BLOCK_TIME_S = 3;
-// Most public BSC RPC nodes accept up to 5 000 blocks per eth_getLogs request (~4 hours)
+// BSCScan tokentx accepts unlimited lookback but keep a sane cap
 const BSC_MAX_LOOKBACK_BLOCKS = 5000;
 
 /**
- * Batch-scan BEP-20 USDT transfers to our wallet using a public BSC RPC node.
+ * Batch-scan BEP-20 USDT transfers to our wallet using BSCScan API.
  * Returns a Map of amountUsdt → txHash for all matched amounts.
- *
- * @param pendingAmounts  List of USDT amount strings to look for
- * @param lookbackBlocks  How many blocks to scan back from "latest"
- *                        (capped at BSC_MAX_LOOKBACK_BLOCKS = ~4 hours)
  */
 async function scanBscDeposits(
   pendingAmounts: string[],
@@ -56,89 +40,92 @@ async function scanBscDeposits(
 
   const safeBlocks = Math.min(lookbackBlocks, BSC_MAX_LOOKBACK_BLOCKS);
 
-  // Pre-compute expected wei ranges for each pending amount
+  // Pre-compute expected wei ranges for each pending amount (USDT BEP-20 = 18 decimals)
   const ranges = pendingAmounts.map((amt) => {
-    const expectedWei = BigInt(Math.round(parseFloat(amt) * 1_000_000)) * BigInt("1000000000000"); // 18 decimals
+    const expectedWei = BigInt(Math.round(parseFloat(amt) * 1_000_000)) * BigInt("1000000000000");
     const toleranceWei = BigInt("10000000000000000"); // ±0.01 USDT
     return { amt, min: expectedWei - toleranceWei, max: expectedWei + toleranceWei };
   });
 
-  const walletPadded = "0x000000000000000000000000" + USDT_BEP20_ADDRESS.slice(2);
+  try {
+    // 1. Get current block number
+    const blockData = await bscscanGet({ module: "proxy", action: "eth_blockNumber" }) as { result?: string };
+    const currentBlock = parseInt(blockData.result ?? "0x0", 16);
+    if (!currentBlock || isNaN(currentBlock)) {
+      console.error("[deposit] BSCScan: could not fetch current block number");
+      return results;
+    }
 
-  for (const rpc of BSC_RPC_ENDPOINTS) {
-    try {
-      // Get current block number
-      const blockHex = await bscRpcCall(rpc, "eth_blockNumber", []) as string;
-      const currentBlock = parseInt(blockHex, 16);
-      if (!currentBlock || isNaN(currentBlock)) continue;
+    const startBlock = Math.max(0, currentBlock - safeBlocks);
 
-      const fromBlock = "0x" + Math.max(0, currentBlock - safeBlocks).toString(16);
+    // 2. Fetch BEP-20 USDT transfers to our wallet from startBlock onwards
+    const txData = await bscscanGet({
+      module: "account", action: "tokentx",
+      contractaddress: USDT_BEP20_CONTRACT,
+      address: USDT_BEP20_ADDRESS,
+      startblock: startBlock,
+      endblock: 99999999,
+      sort: "asc",
+    }) as { status: string; message: string; result: Array<{ hash: string; to: string; value: string }> | string };
 
-      // Fetch USDT Transfer logs where `to` is our wallet
-      const logs = await bscRpcCall(rpc, "eth_getLogs", [{
-        fromBlock,
-        toBlock: "latest",
-        address: USDT_BEP20_CONTRACT,
-        topics: [ERC20_TRANSFER_TOPIC, null, walletPadded],
-      }]) as Array<{ transactionHash: string; data: string }>;
+    if (txData.status !== "1" || !Array.isArray(txData.result)) {
+      if (txData.message !== "No transactions found") {
+        console.error("[deposit] BSCScan tokentx error:", txData.message, typeof txData.result === "string" ? txData.result : "");
+      }
+      return results;
+    }
 
-      if (!Array.isArray(logs)) continue;
-
-      // Match each log against pending deposit amounts
-      for (const log of logs) {
-        const val = BigInt(log.data ?? "0x0");
-        for (const r of ranges) {
-          if (results.has(r.amt)) continue; // already matched
-          if (val >= r.min && val <= r.max) {
-            console.log(`[deposit] ✓ RPC matched ${r.amt} USDT → tx ${log.transactionHash}`);
-            results.set(r.amt, log.transactionHash);
-          }
+    // 3. Match transfers against pending amounts
+    for (const tx of txData.result) {
+      if (tx.to?.toLowerCase() !== USDT_BEP20_ADDRESS) continue;
+      const value = BigInt(tx.value ?? "0");
+      for (const r of ranges) {
+        if (results.has(r.amt)) continue;
+        if (value >= r.min && value <= r.max) {
+          console.log(`[deposit] ✓ BSCScan matched ${r.amt} USDT → tx ${tx.hash}`);
+          results.set(r.amt, tx.hash);
         }
       }
-
-      // Successfully queried this RPC — return results
-      return results;
-    } catch (err) {
-      console.error(`[deposit] RPC scan failed (${rpc}):`, (err as Error).message);
-      // Try next endpoint
     }
+
+    console.log(`[deposit] BSCScan scan: ${txData.result.length} tx(s) from block ${startBlock}, ${results.size} match(es)`);
+  } catch (err) {
+    console.error("[deposit] BSCScan scan failed:", (err as Error).message);
   }
 
-  console.error("[deposit] All BSC RPC endpoints failed");
   return results;
 }
 
 /**
- * Verify a specific tx hash for a BEP-20 USDT transfer to our wallet.
- * Uses direct RPC getLogs on the transaction's block for precision.
+ * Verify a specific tx hash for a BEP-20 USDT transfer to our wallet via BSCScan API.
  */
 async function verifyBep20Hash(txHash: string, minWei: bigint): Promise<{ ok: boolean; reason?: string }> {
   const walletPadded = "0x000000000000000000000000" + USDT_BEP20_ADDRESS.slice(2);
-
-  for (const rpc of BSC_RPC_ENDPOINTS) {
-    try {
-      const receipt = await bscRpcCall(rpc, "eth_getTransactionReceipt", [txHash]) as {
+  try {
+    const data = await bscscanGet({ module: "proxy", action: "eth_getTransactionReceipt", txhash: txHash }) as {
+      result?: {
         status?: string;
         logs?: Array<{ address: string; topics: string[]; data: string }>;
       } | null;
-      if (!receipt) return { ok: false, reason: "notfound" };
-      if (receipt.status === "0x0") return { ok: false, reason: "failed" };
-      const logs = receipt.logs ?? [];
-      let foundUsdt = false;
-      for (const log of logs) {
-        if (log.address?.toLowerCase() !== USDT_BEP20_CONTRACT) continue;
-        foundUsdt = true;
-        if (log.topics?.[0]?.toLowerCase() !== ERC20_TRANSFER_TOPIC) continue;
-        if (log.topics?.[2]?.toLowerCase() !== walletPadded) continue;
-        const val = BigInt(log.data ?? "0x0");
-        if (val >= minWei) return { ok: true };
-      }
-      return { ok: false, reason: foundUsdt ? "mismatch" : "notusdt" };
-    } catch {
-      continue;
+    };
+    const receipt = data.result;
+    if (!receipt) return { ok: false, reason: "notfound" };
+    if (receipt.status === "0x0") return { ok: false, reason: "failed" };
+    const logs = receipt.logs ?? [];
+    let foundUsdt = false;
+    for (const log of logs) {
+      if (log.address?.toLowerCase() !== USDT_BEP20_CONTRACT) continue;
+      foundUsdt = true;
+      if (log.topics?.[0]?.toLowerCase() !== ERC20_TRANSFER_TOPIC) continue;
+      if (log.topics?.[2]?.toLowerCase() !== walletPadded) continue;
+      const val = BigInt(log.data ?? "0x0");
+      if (val >= minWei) return { ok: true };
     }
+    return { ok: false, reason: foundUsdt ? "mismatch" : "notusdt" };
+  } catch (err) {
+    console.error("[deposit] BSCScan verifyHash failed:", (err as Error).message);
+    return { ok: false, reason: "error" };
   }
-  return { ok: false, reason: "error" };
 }
 
 /**
