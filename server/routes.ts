@@ -48,15 +48,25 @@ async function scanBscDeposits(
   });
 
   try {
-    // 1. Get current block number
-    const blockData = await bscscanGet({ module: "proxy", action: "eth_blockNumber" }) as { result?: string };
-    const currentBlock = parseInt(blockData.result ?? "0x0", 16);
-    if (!currentBlock || isNaN(currentBlock)) {
-      console.error("[deposit] BSCScan: could not fetch current block number");
-      return results;
-    }
+    // 1. Convert lookback window to a start block number via timestamp lookup
+    const lookbackSec = safeBlocks * BSC_BLOCK_TIME_S;
+    const fromTimestamp = Math.floor(Date.now() / 1000) - lookbackSec;
+    let startBlock = 0; // fallback: let BSCScan return most-recent 10k txs
 
-    const startBlock = Math.max(0, currentBlock - safeBlocks);
+    try {
+      const blockData = await bscscanGet({
+        module: "block", action: "getblocknobytime",
+        timestamp: fromTimestamp, closest: "before",
+      }) as { status: string; message: string; result: string };
+      console.log("[deposit] BSCScan getblocknobytime:", JSON.stringify(blockData));
+      if (blockData.status === "1" && blockData.result) {
+        startBlock = parseInt(blockData.result, 10);
+      } else {
+        console.warn("[deposit] BSCScan getblocknobytime failed:", blockData.message, "— scanning from block 0");
+      }
+    } catch (blockErr) {
+      console.warn("[deposit] BSCScan getblocknobytime error:", (blockErr as Error).message, "— scanning from block 0");
+    }
 
     // 2. Fetch BEP-20 USDT transfers to our wallet from startBlock onwards
     const txData = await bscscanGet({
@@ -197,7 +207,7 @@ export async function processAllPendingDeposits(): Promise<void> {
       Math.ceil(ageSeconds / BSC_BLOCK_TIME_S) + 40, // +40 blocks (~2 min) buffer
     );
 
-    console.log(`[deposit] Scanning ${pending.length} active pending deposit(s) via BSC RPC (lookback: ${lookbackBlocks} blocks ≈ ${Math.round(lookbackBlocks * BSC_BLOCK_TIME_S / 60)} min)…`);
+    console.log(`[deposit] Scanning ${pending.length} active pending deposit(s) via BSCScan API (lookback: ${lookbackBlocks} blocks ≈ ${Math.round(lookbackBlocks * BSC_BLOCK_TIME_S / 60)} min)…`);
 
     // One RPC call fetches logs for all pending amounts at once
     const amounts = pending.map((d) => d.amountUsdt);
