@@ -113,33 +113,55 @@ async function scanBscDeposits(
 }
 
 /**
- * Verify a specific tx hash for a BEP-20 USDT transfer to our wallet via BSCScan API.
+ * Verify a specific tx hash for a BEP-20 USDT transfer to our wallet.
+ * Uses eth_getTransactionByHash to find the block, then tokentx to confirm the transfer.
  */
 async function verifyBep20Hash(txHash: string, minWei: bigint): Promise<{ ok: boolean; reason?: string }> {
-  const walletPadded = "0x000000000000000000000000" + USDT_BEP20_ADDRESS.slice(2);
   try {
-    const data = await bscscanGet({ module: "proxy", action: "eth_getTransactionReceipt", txhash: txHash }) as {
-      result?: {
-        status?: string;
-        logs?: Array<{ address: string; topics: string[]; data: string }>;
-      } | null;
-    };
-    const receipt = data.result;
-    if (!receipt) return { ok: false, reason: "notfound" };
-    if (receipt.status === "0x0") return { ok: false, reason: "failed" };
-    const logs = receipt.logs ?? [];
-    let foundUsdt = false;
-    for (const log of logs) {
-      if (log.address?.toLowerCase() !== USDT_BEP20_CONTRACT) continue;
-      foundUsdt = true;
-      if (log.topics?.[0]?.toLowerCase() !== ERC20_TRANSFER_TOPIC) continue;
-      if (log.topics?.[2]?.toLowerCase() !== walletPadded) continue;
-      const val = BigInt(log.data ?? "0x0");
-      if (val >= minWei) return { ok: true };
+    // Step 1: find the transaction and its block number
+    const txRes = await bscscanGet({
+      module: "proxy", action: "eth_getTransactionByHash", txhash: txHash,
+    }) as { result?: { blockNumber?: string; hash?: string } | null };
+
+    console.log(`[deposit] verifyHash txLookup: blockNumber=${txRes.result?.blockNumber ?? "null"}`);
+
+    if (!txRes.result?.blockNumber) return { ok: false, reason: "notfound" };
+
+    const blockNum = parseInt(txRes.result.blockNumber, 16);
+    if (!blockNum || isNaN(blockNum)) return { ok: false, reason: "notfound" };
+
+    // Step 2: get token transfers in that block and look for our hash
+    const tokenRes = await bscscanGet({
+      module: "account", action: "tokentx",
+      contractaddress: USDT_BEP20_CONTRACT,
+      address: USDT_BEP20_ADDRESS,
+      startblock: blockNum,
+      endblock: blockNum + 1,
+      sort: "asc",
+    }) as { status: string; message: string; result: Array<{ hash: string; to: string; value: string }> | string };
+
+    console.log(`[deposit] verifyHash tokentx block ${blockNum}: status=${tokenRes.status} count=${Array.isArray(tokenRes.result) ? tokenRes.result.length : tokenRes.result}`);
+
+    if (tokenRes.status !== "1" || !Array.isArray(tokenRes.result)) {
+      return { ok: false, reason: "notusdt" };
     }
-    return { ok: false, reason: foundUsdt ? "mismatch" : "notusdt" };
+
+    for (const tx of tokenRes.result) {
+      if (tx.hash?.toLowerCase() !== txHash.toLowerCase()) continue;
+      if (tx.to?.toLowerCase() !== USDT_BEP20_ADDRESS) {
+        console.log(`[deposit] verifyHash: tx found but sent to ${tx.to}, expected ${USDT_BEP20_ADDRESS}`);
+        return { ok: false, reason: "mismatch" };
+      }
+      const value = BigInt(tx.value ?? "0");
+      console.log(`[deposit] verifyHash: matched tx value=${value} minWei=${minWei}`);
+      if (value >= minWei) return { ok: true };
+      return { ok: false, reason: "mismatch" };
+    }
+
+    // Hash not in token transfers for that block — likely not a USDT transfer
+    return { ok: false, reason: "notusdt" };
   } catch (err) {
-    console.error("[deposit] BSCScan verifyHash failed:", (err as Error).message);
+    console.error("[deposit] verifyHash failed:", (err as Error).message);
     return { ok: false, reason: "error" };
   }
 }
@@ -1429,9 +1451,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       let found = false;
       let txHash: string | null = null;
 
-      // ── If user provided a TX hash: verify it directly via RPC ──────────────
+      // ── If user provided a TX hash: verify it directly ───────────────────────
       if (userTxHash) {
+        console.log(`[deposit] check #${depositId}: verifying txHash ${userTxHash.slice(0, 10)}... amountUsdt=${deposit.amountUsdt} amountCents=${deposit.amountCents} minWei=${minWei}`);
         const result = await verifyBep20Hash(userTxHash, minWei);
+        console.log(`[deposit] check #${depositId}: verifyHash result=${JSON.stringify(result)}`);
         if (result.ok) {
           found = true;
           txHash = userTxHash;
@@ -1440,7 +1464,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         } else if (result.reason === "mismatch") {
           return res.json({ success: true, status: "pending", message: "Transaction found but sent to wrong wallet or wrong amount. Check address and exact amount." });
         }
-        // reason === "notfound" | "error" | "failed" → RPC may be slow, fall through to scan
+        // reason === "notfound" | "error" → fall through to scan
       }
 
       // ── Batch-scan recent transfers on our BSC wallet ────────────────────────
