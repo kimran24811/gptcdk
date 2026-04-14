@@ -327,33 +327,41 @@ async function fulfillGuestCheckout(guestDepositId: number, txHash: string): Pro
       .where(eq(guestCheckouts.id, checkout.id));
 
     // Parse items and allocate inventory
-    const items: Array<{ planKey: string; planName: string; quantity: number; unitCents: number }> = JSON.parse(checkout.items);
+    const items: Array<{ type?: string; planKey?: string; productId?: number; planName: string; quantity: number; unitCents: number }> = JSON.parse(checkout.items);
     const deliveredKeys: Array<{ planKey: string; keys: string[] }> = [];
 
     for (const item of items) {
-      const allocated = await tx.select({ id: inventoryKeys.id, key: inventoryKeys.key })
-        .from(inventoryKeys)
-        .where(and(eq(inventoryKeys.plan, item.planKey), eq(inventoryKeys.status, "available")))
-        .limit(item.quantity)
-        .for("update", { skipLocked: true });
+      if (item.type === "custom" && item.productId) {
+        // ── Custom product: allocate from customVouchers ──────────────────
+        const rows = await tx.execute<{ id: number; code: string }>(
+          sql`SELECT id, code FROM custom_vouchers WHERE product_id = ${item.productId} AND status = 'available' ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED`
+        );
+        if (rows.rows.length === 0) {
+          await tx.update(guestCheckouts).set({ status: "out_of_stock" }).where(eq(guestCheckouts.id, checkout.id));
+          console.log(`[guest] Checkout ${checkout.token} out_of_stock: no vouchers for product ${item.productId}`);
+          return "out_of_stock";
+        }
+        const voucher = rows.rows[0];
+        await tx.update(customVouchers).set({ status: "sold", soldAt: new Date() }).where(eq(customVouchers.id, voucher.id));
+        deliveredKeys.push({ planKey: item.planName, keys: [voucher.code] });
+      } else {
+        // ── Main plan: allocate from inventoryKeys ────────────────────────
+        const allocated = await tx.select({ id: inventoryKeys.id, key: inventoryKeys.key })
+          .from(inventoryKeys)
+          .where(and(eq(inventoryKeys.plan, item.planKey!), eq(inventoryKeys.status, "available")))
+          .limit(item.quantity)
+          .for("update", { skipLocked: true });
 
-      if (allocated.length < item.quantity) {
-        // Roll back and mark out_of_stock
-        await tx.update(guestCheckouts)
-          .set({ status: "out_of_stock" })
-          .where(eq(guestCheckouts.id, checkout.id));
-        console.log(`[guest] Checkout ${checkout.token} out_of_stock: needed ${item.quantity} ${item.planKey}, got ${allocated.length}`);
-        // Throw to trigger rollback — but we already updated deposit status above.
-        // Instead: do NOT throw; just return out_of_stock (tx will commit deposit=completed + checkout=out_of_stock)
-        return "out_of_stock";
+        if (allocated.length < item.quantity) {
+          await tx.update(guestCheckouts).set({ status: "out_of_stock" }).where(eq(guestCheckouts.id, checkout.id));
+          console.log(`[guest] Checkout ${checkout.token} out_of_stock: needed ${item.quantity} ${item.planKey}, got ${allocated.length}`);
+          return "out_of_stock";
+        }
+
+        const keyIds = allocated.map((k) => k.id);
+        await tx.update(inventoryKeys).set({ status: "sold", soldAt: new Date() }).where(inArray(inventoryKeys.id, keyIds));
+        deliveredKeys.push({ planKey: item.planKey!, keys: allocated.map((k) => k.key) });
       }
-
-      const keyIds = allocated.map((k) => k.id);
-      await tx.update(inventoryKeys)
-        .set({ status: "sold", soldAt: new Date() })
-        .where(inArray(inventoryKeys.id, keyIds));
-
-      deliveredKeys.push({ planKey: item.planKey, keys: allocated.map((k) => k.key) });
     }
 
     // Generate order number and mark fulfilled
@@ -2756,21 +2764,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.json({ success: false, message: "No items provided." });
       }
 
-      // Fetch active plans to validate and price items
+      // Fetch active plans and custom products to validate items
       const activePlans = await db.select().from(mainPlans).where(eq(mainPlans.active, 1));
       const planMap = new Map(activePlans.map((p) => [p.planKey, p]));
+      const activeCustomProducts = await db.select().from(customProducts).where(eq(customProducts.active, 1));
+      const customProductMap = new Map(activeCustomProducts.map((p) => [p.id, p]));
 
-      const cartItems: Array<{ planKey: string; planName: string; quantity: number; unitCents: number }> = [];
+      const cartItems: Array<{ type?: string; planKey?: string; productId?: number; planName: string; quantity: number; unitCents: number }> = [];
       let totalCents = 0;
 
       for (const raw of rawItems) {
+        // ── Custom product item ───────────────────────────────────────────
+        if (raw.type === "custom") {
+          const productId = parseInt(raw.productId, 10);
+          const product = customProductMap.get(productId);
+          if (!product) return res.json({ success: false, message: `Product not found: ${productId}` });
+          cartItems.push({ type: "custom", productId, planName: product.name, quantity: 1, unitCents: product.priceCents });
+          totalCents += product.priceCents;
+          continue;
+        }
+
+        // ── Main plan item ────────────────────────────────────────────────
         const planKey = typeof raw.planKey === "string" ? raw.planKey.trim() : "";
         const quantity = Math.max(1, parseInt(raw.quantity, 10) || 1);
         const plan = planMap.get(planKey);
         if (!plan) {
           return res.json({ success: false, message: `Plan not found: ${planKey}` });
         }
-        // Only inventory-backed plans (action !== "whatsapp") can be bought via guest checkout
         if (plan.action === "whatsapp") {
           return res.json({ success: false, message: `Plan "${plan.name}" requires WhatsApp order.` });
         }
@@ -2778,7 +2798,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (unitCents <= 0) {
           return res.json({ success: false, message: `No pricing found for plan: ${planKey}` });
         }
-        cartItems.push({ planKey, planName: plan.name, quantity, unitCents });
+        cartItems.push({ type: "plan", planKey, planName: plan.name, quantity, unitCents });
         totalCents += unitCents * quantity;
       }
 
