@@ -141,9 +141,18 @@ async function scanBscDeposits(
  * Verify a specific tx hash instantly via direct BSC RPC (eth_getTransactionReceipt).
  * This is a single lightweight call — not rate-limited like eth_getLogs.
  * Falls back to BSCScan V2 tokentx if all RPC nodes fail.
+ *
+ * Uses exact amount range (±0.02 USDT) to prevent using historical large TXs to
+ * fraudulently credit deposits.
  */
-async function verifyBep20Hash(txHash: string, minWei: bigint): Promise<{ ok: boolean; reason?: string }> {
+async function verifyBep20Hash(
+  txHash: string,
+  expectedWei: bigint,
+  toleranceWei = BigInt("20000000000000000"), // ±0.02 USDT
+): Promise<{ ok: boolean; reason?: string }> {
   const walletPadded = "0x000000000000000000000000" + USDT_BEP20_ADDRESS.slice(2);
+  const minWei = expectedWei - toleranceWei;
+  const maxWei = expectedWei + toleranceWei;
 
   // ── Path 1: direct RPC receipt lookup (fast, ~200ms) ─────────────────────
   for (const rpc of BSC_RECEIPT_RPCS) {
@@ -166,8 +175,8 @@ async function verifyBep20Hash(txHash: string, minWei: bigint): Promise<{ ok: bo
         if (log.topics?.[0]?.toLowerCase() !== ERC20_TRANSFER_TOPIC) continue;
         if (log.topics?.[2]?.toLowerCase() !== walletPadded) continue;
         const val = BigInt(log.data ?? "0x0");
-        console.log(`[deposit] verifyHash: USDT transfer val=${val} minWei=${minWei}`);
-        if (val >= minWei) return { ok: true };
+        console.log(`[deposit] verifyHash: USDT transfer val=${val} expected=${expectedWei} range=[${minWei},${maxWei}]`);
+        if (val >= minWei && val <= maxWei) return { ok: true };
         return { ok: false, reason: "mismatch" };
       }
       return { ok: false, reason: foundUsdt ? "mismatch" : "notusdt" };
@@ -202,8 +211,8 @@ async function verifyBep20Hash(txHash: string, minWei: bigint): Promise<{ ok: bo
       if (tx.hash?.toLowerCase() !== txHash.toLowerCase()) continue;
       if (tx.to?.toLowerCase() !== USDT_BEP20_ADDRESS) return { ok: false, reason: "mismatch" };
       const value = BigInt(tx.value ?? "0");
-      console.log(`[deposit] verifyHash BSCScan fallback: value=${value} minWei=${minWei}`);
-      if (value >= minWei) return { ok: true };
+      console.log(`[deposit] verifyHash BSCScan fallback: value=${value} range=[${minWei},${maxWei}]`);
+      if (value >= minWei && value <= maxWei) return { ok: true };
       return { ok: false, reason: "mismatch" };
     }
     return { ok: false, reason: "notusdt" };
@@ -1493,15 +1502,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.json({ success: false, status: "expired", message: "This deposit request has expired." });
       }
 
-      // Minimum expected wei (allow small tolerance: exact amount ±0.01 USDT)
-      const minWei = BigInt(deposit.amountCents) * BigInt("9500000000000000");
+      // Exact expected wei for this deposit (same formula as scanBscDeposits)
+      const expectedWei = BigInt(Math.round(parseFloat(deposit.amountUsdt) * 1_000_000)) * BigInt("1000000000000");
       let found = false;
       let txHash: string | null = null;
 
       // ── If user provided a TX hash: verify it directly ───────────────────────
       if (userTxHash) {
-        console.log(`[deposit] check #${depositId}: verifying txHash ${userTxHash.slice(0, 10)}... amountUsdt=${deposit.amountUsdt} amountCents=${deposit.amountCents} minWei=${minWei}`);
-        const result = await verifyBep20Hash(userTxHash, minWei);
+        console.log(`[deposit] check #${depositId}: verifying txHash ${userTxHash.slice(0, 10)}... amountUsdt=${deposit.amountUsdt} expectedWei=${expectedWei}`);
+        const result = await verifyBep20Hash(userTxHash, expectedWei);
         console.log(`[deposit] check #${depositId}: verifyHash result=${JSON.stringify(result)}`);
         if (result.ok) {
           found = true;
