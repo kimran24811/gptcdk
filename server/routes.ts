@@ -2197,12 +2197,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (suppyStatus === "ok" || suppyStatus === "completed") {
           console.log(`[activate/suppy] instant activation (status:${suppyStatus}) for key:`, cdkKey.trim().slice(0, 8) + "...");
 
-          // Give Suppy 2 seconds to update the key status, then verify
-          await new Promise(r => setTimeout(r, 2000));
+          // Give Suppy 4 seconds to update the key status, then verify
+          // (2s was too short — Suppy DB sometimes not updated yet)
+          await new Promise(r => setTimeout(r, 4000));
           const verify = await suppyCheckKey(cdkKey.trim(), suppyService);
           console.log(`[activate/suppy] post-instant verify:`, JSON.stringify(verify));
 
-          if (!verify || verify.status === "Available") {
+          // Fail if: null response, key not found, or key still "available" (silently rejected)
+          // suppyCheckKey lowercases all statuses, so compare lowercase only
+          if (!verify || !verify.found || verify.status === "available") {
             // Key is still available — activation was silently rejected (e.g. workspace account)
             return res.json({
               success: false,
@@ -2212,7 +2215,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             });
           }
 
-          return res.json({ success: true, activated: true, code: cdkKey.trim(), service: suppyService });
+          // Include email from verify response so client can show which account was activated
+          return res.json({
+            success: true,
+            activated: true,
+            code: cdkKey.trim(),
+            service: suppyService,
+            email: verify.activatedEmail ?? null,
+            subscription: verify.plan ?? null,
+          });
         }
 
         // "started" = async activation in progress — frontend polls /api/suppy-recheck/:code
@@ -2276,9 +2287,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       console.log("[activate-team/suppy] key:", cdkKey.trim().slice(0, 8) + "... email:", email.trim());
       const result = await suppyFetch("POST", "/chatgpt/keys/activate", { code: cdkKey.trim(), email: email.trim() });
       if (result.ok && result.data?.key) {
+        // Verify key was actually activated — team accounts can also silently fail
+        await new Promise(r => setTimeout(r, 4000));
+        const verify = await suppyCheckKey(cdkKey.trim(), "chatgpt");
+        console.log(`[activate-team/suppy] post-activate verify:`, JSON.stringify(verify));
+
+        if (!verify || !verify.found || verify.status === "available") {
+          return res.json({
+            success: false,
+            message: "Activation failed. Make sure you are using a personal ChatGPT account, not a work or enterprise account.",
+          });
+        }
+
         return res.json({
           success: true,
-          email: result.data.key.activated_email,
+          email: verify.activatedEmail ?? result.data.key.activated_email,
           activationType: result.data.activation_type,
           subscriptionEndsAt: result.data.key.subscription_ends_at ?? null,
           subscriptionHours: result.data.key.subscription_hours ?? null,
@@ -2312,7 +2335,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (status === "error") {
         return res.json({ pending: false, success: false, message: d.message || "Activation failed on provider side." });
       }
-      // started | account_found — still in progress
+      // started | account_found — also check actual key status as a fallback
+      // (sometimes subscription_sent never fires but key is already activated)
+      const keyInfo = await suppyCheckKey(String(req.params.code), suppyService);
+      if (keyInfo?.found && keyInfo.status === "activated") {
+        return res.json({ pending: false, success: true, email: keyInfo.activatedEmail ?? null, activationType: null });
+      }
+      if (keyInfo?.found && keyInfo.status === "available") {
+        // Key is still available after polling — activation silently failed
+        return res.json({ pending: false, success: false, message: suppyService === "claude"
+          ? "Activation failed. Make sure you are using a personal Claude.ai account, not a Claude for Work account."
+          : "Activation failed. Make sure you are using a personal ChatGPT account, not a work or enterprise account." });
+      }
       return res.json({ pending: true, status: d.status });
     } catch (err) {
       console.error("[suppy-status] poll error:", err);
