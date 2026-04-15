@@ -516,6 +516,8 @@ function CustomPurchaseDialog({ product, onClose, onSuccess }: { product: Custom
   const { toast } = useToast();
   const { user } = useAuth();
   const [, navigate] = useLocation();
+  const [guestEmail, setGuestEmail] = useState("");
+  const [checkingOut, setCheckingOut] = useState(false);
   const balanceSufficient = user ? user.balanceCents >= product.priceCents : false;
   const shortfall = user ? Math.max(0, product.priceCents - user.balanceCents) / 100 : 0;
 
@@ -539,6 +541,27 @@ function CustomPurchaseDialog({ product, onClose, onSuccess }: { product: Custom
     onError: () => toast({ title: "Error", description: "Purchase failed. Please try again.", variant: "destructive" }),
   });
 
+  const guestCheckout = async () => {
+    setCheckingOut(true);
+    try {
+      const res = await apiRequest("POST", "/api/guest/checkout", {
+        items: [{ type: "custom", productId: product.id }],
+        guestEmail: guestEmail.trim() || undefined,
+      });
+      const data = await res.json();
+      if (data.success) {
+        onClose();
+        navigate(`/checkout/${data.token}`);
+      } else {
+        toast({ title: "Checkout failed", description: data.message, variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Checkout failed", description: "Could not connect. Please try again.", variant: "destructive" });
+    } finally {
+      setCheckingOut(false);
+    }
+  };
+
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="sm:max-w-sm">
@@ -560,36 +583,42 @@ function CustomPurchaseDialog({ product, onClose, onSuccess }: { product: Custom
             <div className="shrink-0 font-bold text-foreground">${(product.priceCents / 100).toFixed(2)}</div>
           </div>
 
-          {user ? (
-            <>
+          {/* Guest checkout — primary path */}
+          <div className="space-y-2">
+            <Input
+              type="email"
+              placeholder="Email (optional) — for order receipt"
+              value={guestEmail}
+              onChange={(e) => setGuestEmail(e.target.value)}
+              className="text-sm"
+            />
+            <Button
+              className="w-full gap-2" size="lg"
+              onClick={guestCheckout}
+              disabled={checkingOut || product.stock === 0}
+              data-testid="button-guest-checkout-custom"
+            >
+              {checkingOut ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+              {checkingOut ? "Creating order..." : `Pay $${(product.priceCents / 100).toFixed(2)} USDT`}
+            </Button>
+            <p className="text-xs text-muted-foreground text-center">Pay with USDT · Code delivered instantly</p>
+          </div>
+
+          {/* Balance purchase for logged-in users */}
+          {user && (
+            <div className="space-y-2 pt-1 border-t border-border">
+              <p className="text-xs font-medium text-muted-foreground text-center">— or pay with your balance —</p>
               {!balanceSufficient && (
                 <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-sm text-amber-600 dark:text-amber-400">
-                  Insufficient balance. You need <span className="font-semibold">${shortfall.toFixed(2)}</span> more.{" "}
+                  Need <span className="font-semibold">${shortfall.toFixed(2)}</span> more.{" "}
                   <a href="/account" className="underline font-medium">Top up →</a>
                 </div>
               )}
-              {balanceSufficient && (
-                <p className="text-xs text-muted-foreground">Your balance: <span className="font-semibold text-foreground">${(user.balanceCents / 100).toFixed(2)}</span></p>
-              )}
-              <div className="flex gap-2">
-                <Button variant="outline" className="flex-1" onClick={onClose} disabled={purchase.isPending}>Cancel</Button>
-                <Button className="flex-1" onClick={() => purchase.mutate()} disabled={purchase.isPending || !balanceSufficient} data-testid="button-confirm-custom-purchase">
-                  {purchase.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-                  Buy for ${(product.priceCents / 100).toFixed(2)}
-                </Button>
-              </div>
-            </>
-          ) : (
-            <>
-              <p className="text-sm text-muted-foreground">You need to log in to purchase this item.</p>
-              <div className="flex gap-2">
-                <Button variant="outline" className="flex-1" onClick={onClose}>Cancel</Button>
-                <Button className="flex-1 gap-2" onClick={() => navigate("/login")} data-testid="button-login-to-purchase">
-                  <LogIn className="w-4 h-4" />
-                  Log In
-                </Button>
-              </div>
-            </>
+              <Button variant="outline" className="w-full" onClick={() => purchase.mutate()} disabled={purchase.isPending || !balanceSufficient} data-testid="button-confirm-custom-purchase">
+                {purchase.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                Pay with Balance
+              </Button>
+            </div>
           )}
         </div>
       </DialogContent>
