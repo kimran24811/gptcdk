@@ -108,9 +108,9 @@ export function PageLayout({
               </Button>
             ) : (
               <a href="/login" data-testid="link-login-header">
-                <Button size="sm" variant="ghost" className="gap-1.5">
+                <Button size="sm" variant="outline" className="gap-1.5 border-primary text-primary hover:bg-primary hover:text-primary-foreground font-semibold">
                   <LogIn className="w-3.5 h-3.5" />
-                  <span className="hidden xs:inline">Login</span>
+                  Sign In
                 </Button>
               </a>
             )}
