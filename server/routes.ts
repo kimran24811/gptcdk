@@ -530,7 +530,8 @@ async function suppyPollActivation(code: string, maxAttempts = 10, intervalMs = 
       if (!res.ok || !res.data || typeof res.data !== "object") continue;
       const d = res.data;
       if (d.status === "subscription_sent") {
-        return { success: true, email: d.key?.activated_email ?? undefined, activationType: d.activation_type };
+        const email = d.key?.activated_email ?? d.activated_email ?? d.email ?? undefined;
+        return { success: true, email, activationType: d.activation_type };
       }
       if (d.status === "error") {
         return { success: false, message: d.message || "Activation failed on provider side." };
@@ -2219,16 +2220,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             // verify.status === "available" — still pending, try again unless last attempt
           }
 
-          // After all retries: if still "available" → workspace account (persistent rejection)
-          // If found:false / null every time → trust Suppy's "ok" (API lookup issue, activation likely worked)
+          // After all retries: if still "available" → could be workspace account OR DB lag.
+          // We trust Suppy's "ok"/"completed" response to avoid false failures that affect
+          // legitimate users. Workspace account users will see ChatGPT hasn't changed.
           if (verify?.found && verify.status === "available") {
-            console.log(`[activate/suppy] key still available after all retries — workspace/enterprise account`);
-            return res.json({
-              success: false,
-              message: suppyService === "claude"
-                ? "Activation failed. Make sure you are using a personal Claude.ai account, not a Claude for Work or Anthropic developer console account."
-                : "Activation failed. Make sure you are using a personal ChatGPT account, not a work or enterprise account.",
-            });
+            console.log(`[activate/suppy] key still available after all retries — returning soft success (trusting Suppy)`);
           }
 
           // Success — include email if verification returned it
@@ -2486,9 +2482,52 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (keys.length > 500) {
       return res.json({ success: false, message: "Maximum 500 keys per request." });
     }
+    // Suppy keys are 32 hex chars; everything else goes to OVH
+    const suppyPattern = /^[0-9A-Fa-f]{32}$/;
+    const suppyKeys = keys.filter((k: string) => suppyPattern.test(k.trim()));
+    const ovhKeys = keys.filter((k: string) => !suppyPattern.test(k.trim()));
+
     try {
-      const data = await apiCall("POST", "/keys/batch-status", { keys });
-      return res.json(data);
+      const results: Array<{ key: string; status: string; activated_at?: string; activated_for?: string }> = [];
+
+      // OVH batch check
+      if (ovhKeys.length > 0) {
+        const data = await apiCall("POST", "/keys/batch-status", { keys: ovhKeys });
+        if (data.success && Array.isArray(data.data)) {
+          results.push(...data.data);
+        } else {
+          // OVH failed — mark all OVH keys as invalid
+          ovhKeys.forEach((k: string) => results.push({ key: k, status: "invalid" }));
+        }
+      }
+
+      // Suppy individual checks (rate-limit: max 10 per batch, Suppy has 10 req/min)
+      const suppyBatch = suppyKeys.slice(0, 10);
+      for (const k of suppyBatch) {
+        try {
+          const suppy = await suppyCheckKey(k.trim());
+          if (!suppy || !suppy.found) {
+            results.push({ key: k, status: "invalid" });
+          } else {
+            const st = suppy.status === "activated" ? "used"
+              : suppy.status === "available" ? "available"
+              : suppy.status === "expired" ? "expired"
+              : "invalid";
+            results.push({
+              key: k,
+              status: st,
+              activated_at: suppy.activatedAt ? String(suppy.activatedAt) : undefined,
+              activated_for: suppy.activatedEmail ?? undefined,
+            });
+          }
+        } catch {
+          results.push({ key: k, status: "invalid" });
+        }
+      }
+      // If user submitted more than 10 Suppy keys, mark the rest as invalid (rate limit)
+      suppyKeys.slice(10).forEach((k: string) => results.push({ key: k, status: "invalid" }));
+
+      return res.json({ success: true, data: results });
     } catch (err) {
       console.error("Batch status error:", err);
       return res.status(500).json({ success: false, message: "Service unavailable. Please try again." });

@@ -13,6 +13,7 @@ interface KeyStatus {
   key: string;
   status: "available" | "used" | "expired" | "invalid";
   activated_at?: string;
+  activated_for?: string;
 }
 
 const STATUS_CONFIG = {
@@ -232,7 +233,12 @@ export default function BatchCheckPage() {
                         {item.key}
                       </code>
                       <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-                        {item.activated_at && (
+                        {item.activated_for && (
+                          <span className="text-xs text-muted-foreground hidden lg:block max-w-[180px] truncate">
+                            {item.activated_for}
+                          </span>
+                        )}
+                        {item.activated_at && !item.activated_for && (
                           <span className="text-xs text-muted-foreground hidden md:block">
                             {new Date(item.activated_at).toLocaleDateString()}
                           </span>
