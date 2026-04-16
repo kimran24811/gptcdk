@@ -653,10 +653,14 @@ async function requireAdmin(req: Request, res: Response, next: NextFunction) {
 // ── Seed admin on startup ─────────────────────────────
 async function seedAdmin() {
   const adminEmail = process.env.ADMIN_EMAIL || "admin@gptcdk.xyz";
-  const adminPassword = process.env.ADMIN_PASSWORD || "Admin@CDK2024!";
+  const adminPassword = process.env.ADMIN_PASSWORD;
+  if (!adminPassword) {
+    console.warn("[seed] ADMIN_PASSWORD env var not set — admin account not created/updated.");
+    return;
+  }
+  const hash = await bcrypt.hash(adminPassword, 10);
   const [existing] = await db.select().from(users).where(eq(users.email, adminEmail));
   if (!existing) {
-    const hash = await bcrypt.hash(adminPassword, 10);
     await db.insert(users).values({
       email: adminEmail,
       passwordHash: hash,
@@ -665,6 +669,10 @@ async function seedAdmin() {
       balanceCents: 0,
     });
     console.log(`[seed] Admin account created: ${adminEmail}`);
+  } else {
+    // Always sync the password from env so Render env changes take effect on restart
+    await db.update(users).set({ passwordHash: hash }).where(eq(users.email, adminEmail));
+    console.log(`[seed] Admin password synced from env: ${adminEmail}`);
   }
 }
 
