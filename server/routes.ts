@@ -2191,22 +2191,38 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           return res.json({ success: false, message });
         }
 
-        // If Suppy says "ok" / "completed", verify the key actually got activated
-        // (workspace/team accounts silently fail — Suppy returns "ok" but the key stays "Available")
+        // If Suppy says "ok" / "completed", verify the key actually got activated.
+        // Workspace/team accounts silently fail — Suppy returns "ok" but key stays "available".
+        // IMPORTANT: Suppy's DB can take up to ~15s to update after activation, so we retry
+        // verification 3 times before concluding it failed (avoids false "workspace" errors).
         const suppyStatus = startRes.data?.status;
         if (suppyStatus === "ok" || suppyStatus === "completed") {
           console.log(`[activate/suppy] instant activation (status:${suppyStatus}) for key:`, cdkKey.trim().slice(0, 8) + "...");
 
-          // Give Suppy 4 seconds to update the key status, then verify
-          // (2s was too short — Suppy DB sometimes not updated yet)
-          await new Promise(r => setTimeout(r, 4000));
-          const verify = await suppyCheckKey(cdkKey.trim(), suppyService);
-          console.log(`[activate/suppy] post-instant verify:`, JSON.stringify(verify));
+          // Retry schedule: check at 4s, 10s, 18s after activation
+          const retryDelays = [4000, 6000, 8000];
+          let verify = null;
+          for (let attempt = 0; attempt < retryDelays.length; attempt++) {
+            await new Promise(r => setTimeout(r, retryDelays[attempt]));
+            verify = await suppyCheckKey(cdkKey.trim(), suppyService);
+            console.log(`[activate/suppy] verify attempt ${attempt + 1}:`, JSON.stringify(verify));
 
-          // Fail if: null response, key not found, or key still "available" (silently rejected)
-          // suppyCheckKey lowercases all statuses, so compare lowercase only
-          if (!verify || !verify.found || verify.status === "available") {
-            // Key is still available — activation was silently rejected (e.g. workspace account)
+            if (verify?.found && verify.status !== "available") {
+              // Key is confirmed activated — stop retrying
+              break;
+            }
+            if (!verify || !verify.found) {
+              // API hiccup (not a real "not found") — keep retrying, don't fail yet
+              verify = null;
+              continue;
+            }
+            // verify.status === "available" — still pending, try again unless last attempt
+          }
+
+          // After all retries: if still "available" → workspace account (persistent rejection)
+          // If found:false / null every time → trust Suppy's "ok" (API lookup issue, activation likely worked)
+          if (verify?.found && verify.status === "available") {
+            console.log(`[activate/suppy] key still available after all retries — workspace/enterprise account`);
             return res.json({
               success: false,
               message: suppyService === "claude"
@@ -2215,14 +2231,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
             });
           }
 
-          // Include email from verify response so client can show which account was activated
+          // Success — include email if verification returned it
           return res.json({
             success: true,
             activated: true,
             code: cdkKey.trim(),
             service: suppyService,
-            email: verify.activatedEmail ?? null,
-            subscription: verify.plan ?? null,
+            email: verify?.activatedEmail ?? null,
+            subscription: verify?.plan ?? null,
           });
         }
 
@@ -2288,11 +2304,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const result = await suppyFetch("POST", "/chatgpt/keys/activate", { code: cdkKey.trim(), email: email.trim() });
       if (result.ok && result.data?.key) {
         // Verify key was actually activated — team accounts can also silently fail
-        await new Promise(r => setTimeout(r, 4000));
-        const verify = await suppyCheckKey(cdkKey.trim(), "chatgpt");
-        console.log(`[activate-team/suppy] post-activate verify:`, JSON.stringify(verify));
+        // Retry schedule: check at 4s, 10s, 18s after activation (Suppy DB can lag)
+        const retryDelays = [4000, 6000, 8000];
+        let verify = null;
+        for (let attempt = 0; attempt < retryDelays.length; attempt++) {
+          await new Promise(r => setTimeout(r, retryDelays[attempt]));
+          verify = await suppyCheckKey(cdkKey.trim(), "chatgpt");
+          console.log(`[activate-team/suppy] verify attempt ${attempt + 1}:`, JSON.stringify(verify));
 
-        if (!verify || !verify.found || verify.status === "available") {
+          if (verify?.found && verify.status !== "available") {
+            // Key is confirmed activated — stop retrying
+            break;
+          }
+          if (!verify || !verify.found) {
+            // API hiccup — keep retrying, don't fail yet
+            verify = null;
+            continue;
+          }
+          // verify.status === "available" — still pending, try again unless last attempt
+        }
+
+        // If STILL "available" after all retries → workspace/enterprise account (persistent rejection)
+        // If found:false / null every time → trust Suppy's "ok" (API lookup issue, activation likely worked)
+        if (verify?.found && verify.status === "available") {
+          console.log(`[activate-team/suppy] key still available after all retries — workspace/enterprise account`);
           return res.json({
             success: false,
             message: "Activation failed. Make sure you are using a personal ChatGPT account, not a work or enterprise account.",
@@ -2301,7 +2336,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
         return res.json({
           success: true,
-          email: verify.activatedEmail ?? result.data.key.activated_email,
+          email: verify?.activatedEmail ?? result.data.key.activated_email,
           activationType: result.data.activation_type,
           subscriptionEndsAt: result.data.key.subscription_ends_at ?? null,
           subscriptionHours: result.data.key.subscription_hours ?? null,
